@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stem-agent"
+version = "0.1.0"
+description = "A minimal stem agent that specializes itself for a class of problems via measurable evolution."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "stem-agent author" }]
+dependencies = [
+  "pytest>=6.0",
+]
+
+[project.optional-dependencies]
+llm = ["openai>=1.40"]
+dev = ["pytest>=6.0", "ruff>=0.4"]
+
+[project.scripts]
+stem = "stem_agent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["stem_agent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]

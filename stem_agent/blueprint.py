@@ -1,16 +1,23 @@
 """Blueprint and DomainProfile data models with JSON serialization.
 
 A Blueprint is the artifact that a stem agent produces (and an evolved
-agent consumes). It encodes the choices the brief calls out: configuration,
-tool/primitive selection, workflow, and stopping rules. Every field is
-plain JSON so it can be diffed and version-controlled.
+agent consumes). It encodes the choices the brief calls out:
+configuration, tool/primitive selection, workflow, and stopping rules.
+Every field is plain JSON so it can be diffed and version-controlled.
+
+The `workflow` field is read by `agent.solve_task` and decides which
+phases run. The recognized phases are listed in `WORKFLOW_STEPS`.
 """
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Dict, List
+
+
+log = logging.getLogger(__name__)
 
 
 PRIMITIVE_NAMES: List[str] = [
@@ -26,7 +33,24 @@ PRIMITIVE_NAMES: List[str] = [
 
 
 WORKFLOW_DEFAULT: List[str] = ["run_tests", "propose", "apply_check"]
-WORKFLOW_LOCALIZED: List[str] = ["run_tests", "localize", "propose", "apply_check"]
+WORKFLOW_STEPS = frozenset({"run_tests", "localize", "propose", "apply_check"})
+_WORKFLOW_REQUIRED = ("run_tests", "propose", "apply_check")
+
+
+def validate_workflow(workflow: List[str]) -> None:
+    """Reject workflows the agent cannot execute.
+
+    Unknown steps raise; required steps must all be present. Order is
+    not enforced beyond that, but `agent.solve_task` reads steps in
+    declared order, so e.g. `localize` must precede `propose` to take
+    effect.
+    """
+    unknown = [s for s in workflow if s not in WORKFLOW_STEPS]
+    if unknown:
+        raise ValueError(f"unknown workflow step(s): {unknown}")
+    missing = [s for s in _WORKFLOW_REQUIRED if s not in workflow]
+    if missing:
+        raise ValueError(f"workflow missing required step(s): {missing}")
 
 
 @dataclass
@@ -35,6 +59,10 @@ class Blueprint:
 
     The stem (initial) blueprint is intentionally domain-agnostic: every
     primitive equally weighted, no localization, conservative budget.
+
+    `lineage` records the candidate names that produced this blueprint
+    via successive evolve perturbations (newest last). It is purely
+    informational and is not consumed by the agent.
     """
 
     name: str = "stem"
@@ -44,11 +72,10 @@ class Blueprint:
         default_factory=lambda: list(PRIMITIVE_NAMES)
     )
     primitive_budget: int = 32
-    use_localization: bool = False
     use_llm_proposal: bool = False
     llm_system_prompt: str = ""
     early_stop_no_progress: int = 32
-    max_iterations: int = 32
+    lineage: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -58,12 +85,29 @@ class Blueprint:
         path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
 
     @classmethod
-    def from_json(cls, path: Path) -> "Blueprint":
-        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+    def from_json(cls, path: Path, *, strict: bool = True) -> "Blueprint":
+        return cls.from_dict(
+            json.loads(Path(path).read_text(encoding="utf-8")), strict=strict
+        )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Blueprint":
+    def from_dict(cls, data: Dict[str, Any], *, strict: bool = True) -> "Blueprint":
+        """Construct from a dict.
+
+        Strict mode (default) raises on unknown keys so blueprint typos
+        do not silently degrade behavior. Pass `strict=False` to log a
+        warning and drop the unknowns instead, which is useful when
+        loading a blueprint authored against a newer revision.
+        """
         keys = {f.name for f in fields(cls)}
+        unknown = [k for k in data if k not in keys]
+        if unknown:
+            if strict:
+                raise ValueError(
+                    f"unknown blueprint field(s): {sorted(unknown)}. "
+                    f"Pass strict=False to drop them with a warning instead."
+                )
+            log.warning("dropping unknown blueprint field(s): %s", sorted(unknown))
         clean = {k: v for k, v in data.items() if k in keys}
         return cls(**clean)
 
@@ -75,7 +119,7 @@ class DomainProfile:
     `primitive_frequencies` is normalized so values sum to 1 (or 0 if no
     fixes were observed). `localization_useful` is set when test
     tracebacks consistently reference solution.py source lines.
-    `recommended_budget` is observed-iters-to-solve-max plus headroom —
+    `recommended_budget` is observed-iters-to-solve-max plus headroom:
     the agent's domain-aware sense of how many candidates it should be
     willing to try before giving up.
     """

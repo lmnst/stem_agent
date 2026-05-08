@@ -67,10 +67,8 @@ def analyze_domain(
         description="Uniform-priority probe used during domain analysis.",
         primitive_priority=list(PRIMITIVE_NAMES),
         primitive_budget=probe_budget,
-        use_localization=False,
         use_llm_proposal=False,
         early_stop_no_progress=probe_budget,
-        max_iterations=probe_budget,
     )
     results = evaluate_split(train_dir, probe, llm=None)
 

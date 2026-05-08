@@ -1,27 +1,37 @@
 """Candidate generation, dev-set selection, and stopping rules.
 
-The candidate space is an explicit, finite grid: priority orderings ×
-budgets × early-stop values × localization flag × LLM-proposal flag.
-This is the "evolution" loop: each generation scores its candidates on
-the dev set, takes the best (ties broken by mean iterations-to-solve),
-and then perturbs the top survivors to seed the next generation.
+The candidate space is an explicit, finite grid: priority orderings
+crossed with budgets and a localization toggle (expressed as workflow
+membership of `localize`). LLM-proposal is a separate flag toggled by
+the CLI's `--use-llm`. This is the "evolution" loop: each generation
+scores its candidates on the dev set, takes the best (ties broken by
+mean iterations-to-solve, then by budget closeness to the
+profile-recommended budget), then perturbs the top survivors to seed
+the next generation.
 
 Stopping rules:
 - Stop when no improvement for `patience` consecutive generations.
 - Hard cap at `max_generations`.
-
-Both rules are needed: patience handles the common case (gain plateaus
-after one or two rounds), the hard cap is a safety net.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .agent import evaluate_split
-from .blueprint import PRIMITIVE_NAMES, Blueprint, DomainProfile
+from .blueprint import (
+    PRIMITIVE_NAMES,
+    WORKFLOW_DEFAULT,
+    Blueprint,
+    DomainProfile,
+)
 from .llm import LLMClient
+
+
+# Workflow that runs the localize step before propose.
+WORKFLOW_LOCALIZED: List[str] = ["run_tests", "localize", "propose", "apply_check"]
 
 
 @dataclass
@@ -31,16 +41,24 @@ class CandidateScore:
     mean_iters: float
     n_solved: int
     n_total: int
+    target_budget: int
     generation: int = 0
 
-    def key(self) -> Tuple[float, float, int]:
-        # Sort by descending pass_rate, then ascending mean_iters,
-        # then descending budget (larger = more headroom on hard tasks).
-        return (-self.pass_rate, self.mean_iters, -self.blueprint.primitive_budget)
+    def key(self) -> Tuple[float, float, int, int]:
+        # Sort by descending pass_rate, then ascending mean_iters, then by
+        # closeness to the profile-recommended budget (so saturated dev
+        # runs do not reward wasteful budget growth), then by smaller
+        # raw budget to break the remaining ties deterministically.
+        return (
+            -self.pass_rate,
+            self.mean_iters,
+            abs(self.blueprint.primitive_budget - self.target_budget),
+            self.blueprint.primitive_budget,
+        )
 
 
 def stem_blueprint() -> Blueprint:
-    """The initial domain-agnostic stem agent — what the baseline runs.
+    """The initial domain-agnostic stem agent: what the baseline runs.
 
     Two deliberately unspecialized choices:
     - **Alphabetical priority** over primitives. The order isn't curated;
@@ -56,12 +74,11 @@ def stem_blueprint() -> Blueprint:
             "Domain-agnostic stem. Alphabetical primitive priority "
             "(no curation), conservative budget."
         ),
+        workflow=list(WORKFLOW_DEFAULT),
         primitive_priority=sorted(PRIMITIVE_NAMES),
         primitive_budget=8,
-        use_localization=False,
         use_llm_proposal=False,
         early_stop_no_progress=8,
-        max_iterations=8,
     )
 
 
@@ -72,11 +89,15 @@ def _initial_candidates(
 ) -> List[Blueprint]:
     """Candidate blueprints derived from the domain profile.
 
-    Three priority orderings × two budget tiers × localization options.
-    The "ranked" priority comes from the profile's empirical
-    primitive-fix frequencies; "alpha" is the no-domain-knowledge
-    baseline; "reverse" is an intentionally adversarial ordering used to
-    test that the dev-set selection is doing real work.
+    Priority orderings: `ranked` from empirical fix-frequency, `alpha`
+    as the no-domain-knowledge baseline, `reverse` as an intentionally
+    adversarial control to verify the dev-set selection is doing real
+    work. Budgets: 8, the profile-recommended budget, and twice that.
+    Localization is *not* an axis of the candidate grid: the soft prior
+    only changes mean iterations on the existing benchmark and never
+    independently wins selection (see writeup section 5). Users can
+    still author a localized blueprint by including `localize` in the
+    workflow; the agent honors it.
     """
     ranked = profile.ranked_primitives()
     alpha = sorted(PRIMITIVE_NAMES)
@@ -85,26 +106,24 @@ def _initial_candidates(
 
     profile_budget = max(profile.recommended_budget, 8)
     budgets = sorted({8, profile_budget, profile_budget * 2})
-    loc_options = (False, True) if profile.localization_useful else (False,)
 
     out: List[Blueprint] = []
     for plabel, pri in priorities:
         for budget in budgets:
-            for use_loc in loc_options:
-                name = f"cand-{plabel}-b{budget}-loc{int(use_loc)}-llm{int(use_llm)}"
-                out.append(
-                    Blueprint(
-                        name=name,
-                        description=f"Initial candidate ({plabel} priority, budget={budget}).",
-                        primitive_priority=list(pri),
-                        primitive_budget=budget,
-                        use_localization=use_loc,
-                        use_llm_proposal=use_llm,
-                        llm_system_prompt=profile.llm_hint or "",
-                        early_stop_no_progress=budget,
-                        max_iterations=budget,
-                    )
+            name = f"cand-{plabel}-b{budget}-llm{int(use_llm)}"
+            out.append(
+                Blueprint(
+                    name=name,
+                    description=f"Initial candidate ({plabel} priority, budget={budget}).",
+                    workflow=list(WORKFLOW_DEFAULT),
+                    primitive_priority=list(pri),
+                    primitive_budget=budget,
+                    use_llm_proposal=use_llm,
+                    llm_system_prompt=profile.llm_hint or "",
+                    early_stop_no_progress=budget,
+                    lineage=[],
                 )
+            )
     return out
 
 
@@ -120,41 +139,53 @@ def _next_generation(
 ) -> List[Blueprint]:
     """Perturb the top survivors to explore their neighborhood.
 
-    Perturbations are *expansive* (raise budget, enable localization,
-    promote frequently-fixing primitives) rather than contractive — the
-    dev set may be easy, but the test set isn't necessarily.
+    Perturbations are *expansive* (raise budget, promote frequently
+    fixing primitives) rather than contractive: the dev set may be easy
+    but the test set isn't necessarily. Budget growth is capped at four
+    times the profile-recommended budget so a saturated dev-set
+    pass-rate cannot drive the persisted blueprint's budget arbitrarily
+    high; the cap is what stops the doubling perturbation.
     """
+    budget_cap = max(8, profile.recommended_budget * 4)
     out: List[Blueprint] = []
     for cs in survivors:
         bp = cs.blueprint
-        # Expand budget
-        out.append(
-            _clone(
-                bp,
-                primitive_budget=bp.primitive_budget * 2,
-                early_stop_no_progress=bp.primitive_budget * 2,
-                max_iterations=bp.primitive_budget * 2,
-                name=bp.name + "-x2",
+        # Expand budget, capped to avoid drifting far past the profile-justified ceiling.
+        next_budget = min(bp.primitive_budget * 2, budget_cap)
+        if next_budget > bp.primitive_budget:
+            child_name = bp.name + "-x2"
+            out.append(
+                _clone(
+                    bp,
+                    primitive_budget=next_budget,
+                    early_stop_no_progress=next_budget,
+                    name=child_name,
+                    lineage=list(bp.lineage) + [bp.name],
+                )
             )
-        )
-        # Promote profile-top-5 to the head, keep tail order
+        # Promote profile-top-5 to the head, keep tail order.
         head = profile.ranked_primitives()[:5]
         tail = [p for p in bp.primitive_priority if p not in head]
         promoted = list(head) + tail
         if promoted != bp.primitive_priority:
-            out.append(_clone(bp, primitive_priority=promoted, name=bp.name + "-promote"))
-        # Localization if available and not yet on
-        if profile.localization_useful and not bp.use_localization:
-            out.append(_clone(bp, use_localization=True, name=bp.name + "-loc"))
+            child_name = bp.name + "-promote"
+            out.append(
+                _clone(
+                    bp,
+                    primitive_priority=promoted,
+                    name=child_name,
+                    lineage=list(bp.lineage) + [bp.name],
+                )
+            )
     seen = set()
     unique: List[Blueprint] = []
     for b in out:
         key = (
             tuple(b.primitive_priority),
             b.primitive_budget,
-            b.use_localization,
             b.early_stop_no_progress,
             b.use_llm_proposal,
+            tuple(b.workflow),
         )
         if key in seen:
             continue
@@ -168,6 +199,7 @@ def score_blueprint(
     dev_dir: Path,
     *,
     llm: Optional[LLMClient] = None,
+    target_budget: int = 8,
     generation: int = 0,
 ) -> CandidateScore:
     results = evaluate_split(dev_dir, bp, llm=llm)
@@ -175,13 +207,21 @@ def score_blueprint(
     n_solved = sum(1 for r in results if r.solved)
     pass_rate = (n_solved / n_total) if n_total else 0.0
     iters = [r.iterations for r in results if r.solved]
-    mean_iters = (sum(iters) / len(iters)) if iters else float(bp.primitive_budget)
+    if n_solved == 0:
+        # No solves: declare mean iters as infinity so candidates that
+        # fail every task never beat anything on the iters tiebreaker
+        # (this ordering bug used to flip the sort key when budgets were
+        # different but every candidate had pass_rate=0).
+        mean_iters = math.inf
+    else:
+        mean_iters = sum(iters) / len(iters)
     return CandidateScore(
         blueprint=bp,
         pass_rate=pass_rate,
         mean_iters=mean_iters,
         n_solved=n_solved,
         n_total=n_total,
+        target_budget=target_budget,
         generation=generation,
     )
 
@@ -198,9 +238,12 @@ def evolve(
     """Run generational selection over candidate blueprints.
 
     Returns the best-scoring blueprint and the full per-candidate score
-    history (for the artifacts/log).
+    history (for the artifacts/log). The returned blueprint is renamed
+    to `evolved` and gets its full perturbation chain recorded in
+    `lineage`.
     """
     use_llm = llm is not None and llm.available()
+    target_budget = max(profile.recommended_budget, 8)
     pool = _initial_candidates(profile, use_llm=use_llm)
     history: List[CandidateScore] = []
     best: Optional[CandidateScore] = None
@@ -208,7 +251,10 @@ def evolve(
 
     for gen in range(max_generations):
         scored = [
-            score_blueprint(c, dev_dir, llm=llm, generation=gen) for c in pool
+            score_blueprint(
+                c, dev_dir, llm=llm, target_budget=target_budget, generation=gen
+            )
+            for c in pool
         ]
         scored.sort(key=lambda s: s.key())
         history.extend(scored)
@@ -225,4 +271,14 @@ def evolve(
             break
 
     assert best is not None
-    return best.blueprint, history
+    selected = best.blueprint
+    chosen = _clone(
+        selected,
+        name="evolved",
+        description=(
+            "Evolved blueprint chosen by dev-set selection. Lineage names "
+            "the candidate chain that produced it."
+        ),
+        lineage=list(selected.lineage) + [selected.name],
+    )
+    return chosen, history

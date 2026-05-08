@@ -39,6 +39,12 @@ def _summarize(results: List[SolveResult]) -> dict:
     }
 
 
+def _print_llm_summary(llm: Optional[LLMClient], use_llm: bool) -> None:
+    if not use_llm or llm is None:
+        return
+    print(f"[llm] {llm.summary()}", file=sys.stderr)
+
+
 def cmd_evolve(args: argparse.Namespace) -> int:
     bench = Path(args.bench)
     out_dir = Path(args.out)
@@ -82,6 +88,7 @@ def cmd_evolve(args: argparse.Namespace) -> int:
     stem_blueprint().to_json(out_dir / "stem_blueprint.json")
 
     print(f"evolved blueprint -> {out_dir / 'evolved_blueprint.json'}")
+    _print_llm_summary(llm, args.use_llm)
     return 0
 
 
@@ -96,6 +103,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.out).write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps({k: v for k, v in summary.items() if k != "tasks"}, indent=2))
+    _print_llm_summary(llm, args.use_llm)
     return 0
 
 
@@ -116,6 +124,7 @@ def cmd_solve(args: argparse.Namespace) -> int:
             indent=2,
         )
     )
+    _print_llm_summary(llm, args.use_llm)
     return 0 if res.solved else 1
 
 

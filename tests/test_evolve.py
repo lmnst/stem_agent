@@ -64,6 +64,8 @@ def test_evolve_returns_a_valid_blueprint(tmp_path):
     _build_mini_bench(bench)
     profile, _ = analyze_domain(bench / "train")
     best, history = evolve(profile, bench / "dev", max_generations=1, patience=1)
+    assert best.name == "evolved"
+    assert best.lineage  # carries the candidate chain
     assert set(best.primitive_priority) == set(PRIMITIVE_NAMES)
     assert best.use_llm_proposal is False  # offline
     assert any(s.pass_rate == 1.0 for s in history)

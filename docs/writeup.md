@@ -199,7 +199,13 @@ of 3 generations.
 |---|---|---|
 | **test pass rate** | **9 / 12 = 75.0%** | **12 / 12 = 100.0%** |
 | mean iters (solved tasks) | 2.56 | 3.08 |
-| mean wall-time / task (s) | 0.90 | 0.75 |
+| mean wall-time / task (s) | 0.77 | 0.65 |
+
+Pass rate, n_solved, and mean iters are deterministic and reproduce
+byte-for-byte across runs (pinned by `tests/test_pipeline.py`). Mean
+wall-time per task varies a few tens of milliseconds between runs and
+machines; the values quoted are from the same run that produced the
+pinned artifacts under `artifacts/`.
 
 The three test tasks that the stem fails (task_023 `percent`,
 task_024 `signs_match`, task_025 `is_ascending`) all need >= 9

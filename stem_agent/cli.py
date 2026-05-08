@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -74,7 +75,8 @@ def cmd_evolve(args: argparse.Namespace) -> int:
             "generation": s.generation,
             "name": s.blueprint.name,
             "pass_rate": s.pass_rate,
-            "mean_iters": s.mean_iters,
+            # math.inf marks "no solves"; keep the JSON valid by writing null.
+            "mean_iters": None if math.isinf(s.mean_iters) else s.mean_iters,
             "n_solved": s.n_solved,
             "n_total": s.n_total,
         }

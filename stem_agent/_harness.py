@@ -4,8 +4,8 @@ Imports solution.py and test_solution.py from the workspace directory
 passed as argv[1], runs every `test_*` callable in the test module, and
 exits 0 if all pass, 1 if any fail, 2 on import error.
 
-This is deliberately minimal — no plugin system, no conftest discovery,
-no rootdir search — so per-call wall time is dominated by Python
+This is deliberately minimal (no plugin system, no conftest discovery,
+no rootdir search) so per-call wall time is dominated by Python
 interpreter startup rather than pytest infrastructure. The benchmark
 test files remain pytest-compatible; only the runtime differs.
 """

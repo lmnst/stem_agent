@@ -350,7 +350,7 @@ def generate_variants(source: str, primitive_priority: List[str]) -> List[Varian
     primitives can each produce the same fix.
 
     Variants that would obviously infinite-loop (zero-step AugAssign) are
-    filtered before reaching the runner — the runner has a hard timeout
+    filtered before reaching the runner; the runner has a hard timeout
     as backup, but skipping known traps avoids paying for it.
     """
     seen = {source}

@@ -132,8 +132,15 @@ def test_two_consecutive_runs_produce_identical_task_records(tmp_path):
 def test_evolved_blueprint_differs_from_stem_on_agent_read_field(tmp_path):
     bench = tmp_path / "bench"
     _build_bench(bench)
-    profile, _ = analyze_domain(bench / "train")
-    best, _ = evolve(profile, bench / "dev", max_generations=2, patience=2)
+    profile, train_results = analyze_domain(bench / "train")
+    best, _ = evolve(
+        profile,
+        bench / "dev",
+        train_dir=bench / "train",
+        train_results=train_results,
+        max_generations=2,
+        patience=2,
+    )
     stem = stem_blueprint()
 
     # Fields that solve_task actually reads. `name`, `description`, and
@@ -143,9 +150,71 @@ def test_evolved_blueprint_differs_from_stem_on_agent_read_field(tmp_path):
         "primitive_priority",
         "primitive_budget",
         "early_stop_no_progress",
+        "policy_weights",
+        "policy_confidence_threshold",
+        "policy_fallback_budget",
     )
     differences = [f for f in agent_fields if getattr(stem, f) != getattr(best, f)]
     assert differences, (
         "evolved must differ from stem on at least one agent-read field; "
         f"both had identical {agent_fields}"
     )
+
+
+def test_evolved_carries_a_learned_artifact_absent_from_stem(tmp_path):
+    """Acceptance pin: the evolved blueprint must contain a non-empty
+    `policy_weights` dict, derived from train+dev observations,
+    serialized in the JSON, and absent from the stem."""
+    bench = tmp_path / "bench"
+    _build_bench(bench)
+    profile, train_results = analyze_domain(bench / "train")
+    best, _ = evolve(
+        profile,
+        bench / "dev",
+        train_dir=bench / "train",
+        train_results=train_results,
+        max_generations=1,
+        patience=1,
+    )
+    stem = stem_blueprint()
+    assert stem.policy_weights == {}
+    assert best.policy_weights, "evolved must have learned policy weights"
+    # Round-trip through JSON to confirm serialization works.
+    p = tmp_path / "evolved.json"
+    best.to_json(p)
+    reloaded = Blueprint.from_json(p)
+    assert reloaded.policy_weights == best.policy_weights
+    assert reloaded.policy_confidence_threshold == best.policy_confidence_threshold
+    assert reloaded.policy_fallback_budget == best.policy_fallback_budget
+
+
+def test_two_consecutive_evolves_produce_byte_identical_blueprint(tmp_path):
+    """L3: deterministic evolution. Same inputs => byte-identical output."""
+    bench = tmp_path / "bench"
+    _build_bench(bench)
+
+    profile_a, results_a = analyze_domain(bench / "train")
+    bp_a, _ = evolve(
+        profile_a,
+        bench / "dev",
+        train_dir=bench / "train",
+        train_results=results_a,
+        max_generations=2,
+        patience=2,
+    )
+    out_a = tmp_path / "a.json"
+    bp_a.to_json(out_a)
+
+    profile_b, results_b = analyze_domain(bench / "train")
+    bp_b, _ = evolve(
+        profile_b,
+        bench / "dev",
+        train_dir=bench / "train",
+        train_results=results_b,
+        max_generations=2,
+        patience=2,
+    )
+    out_b = tmp_path / "b.json"
+    bp_b.to_json(out_b)
+
+    assert out_a.read_bytes() == out_b.read_bytes()

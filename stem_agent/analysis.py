@@ -31,8 +31,9 @@ def analyze_domain(
 ) -> Tuple[DomainProfile, List[SolveResult]]:
     """Produce a DomainProfile by probing training tasks.
 
-    Returns the profile and the per-task probe results (used by callers
-    for logs / write-up artifacts).
+    Returns the profile and the per-task probe results. Callers
+    consume `results` to fit the per-task primitive policy in
+    `evolve` (see `policy.fit_policy`).
     """
     train_dir = Path(train_dir)
 

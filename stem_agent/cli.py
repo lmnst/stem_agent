@@ -5,7 +5,6 @@ import argparse
 import json
 import math
 import sys
-from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -52,6 +51,9 @@ def _summarize(results: List[SolveResult], *, budget: Optional[int] = None) -> d
                 "duration_s": round(r.duration_s, 3),
                 "fix": r.fixing_primitive,
                 "note": r.note,
+                "policy_top_score": r.policy_top_score,
+                "policy_top_primitive": r.policy_top_primitive,
+                "policy_low_confidence": r.policy_low_confidence,
             }
             for r in results
         ],
@@ -64,7 +66,7 @@ def cmd_evolve(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print("[1/3] domain analysis (probe over train)", file=sys.stderr)
-    profile, _ = analyze_domain(bench / "train")
+    profile, train_results = analyze_domain(bench / "train")
     profile.to_json(out_dir / "profile.json")
     print(f"  primitive_frequencies: {profile.primitive_frequencies}", file=sys.stderr)
     print(f"  recommended_budget:    {profile.recommended_budget}", file=sys.stderr)
@@ -73,6 +75,8 @@ def cmd_evolve(args: argparse.Namespace) -> int:
     best_bp, history = evolve(
         profile,
         bench / "dev",
+        train_dir=bench / "train",
+        train_results=train_results,
         max_generations=args.max_generations,
         patience=args.patience,
     )
@@ -82,6 +86,8 @@ def cmd_evolve(args: argparse.Namespace) -> int:
         {
             "generation": s.generation,
             "name": s.blueprint.name,
+            "parent": s.parent,
+            "mutation_reason": s.mutation_reason,
             "lineage": list(s.blueprint.lineage),
             "blueprint": s.blueprint.to_dict(),
             "pass_rate": s.pass_rate,
@@ -89,6 +95,8 @@ def cmd_evolve(args: argparse.Namespace) -> int:
             "mean_iters": None if math.isinf(s.mean_iters) else s.mean_iters,
             "n_solved": s.n_solved,
             "n_total": s.n_total,
+            "per_task": s.per_task,
+            "stop_condition": s.stop_condition,
         }
         for s in history
     ]
@@ -100,6 +108,21 @@ def cmd_evolve(args: argparse.Namespace) -> int:
     stem_blueprint().to_json(out_dir / "stem_blueprint.json")
 
     print(f"evolved blueprint -> {out_dir / 'evolved_blueprint.json'}")
+    if best_bp.policy_weights:
+        n_pos = sum(
+            1
+            for fw in best_bp.policy_weights.values()
+            for w in fw.values()
+            if w > 0
+        )
+        print(
+            f"policy: {len(best_bp.policy_weights)} primitives x "
+            f"{len(next(iter(best_bp.policy_weights.values())))} features, "
+            f"{n_pos} positive weights, "
+            f"threshold={best_bp.policy_confidence_threshold:.3f}, "
+            f"fallback_budget={best_bp.policy_fallback_budget}",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -129,6 +152,9 @@ def cmd_solve(args: argparse.Namespace) -> int:
                 "duration_s": round(res.duration_s, 3),
                 "fix": res.fixing_primitive,
                 "note": res.note,
+                "policy_top_score": res.policy_top_score,
+                "policy_top_primitive": res.policy_top_primitive,
+                "policy_low_confidence": res.policy_low_confidence,
             },
             indent=2,
         )
@@ -173,10 +199,18 @@ def _ascii_table(rows: List[Dict[str, object]]) -> str:
 
 
 def _override_budget(bp: Blueprint, budget: int) -> Blueprint:
-    """Clone a blueprint with the budget (and matching early-stop) overridden."""
-    return Blueprint.from_dict(
-        {**bp.to_dict(), "primitive_budget": budget, "early_stop_no_progress": budget}
-    )
+    """Clone a blueprint with the budget (and matching early-stop) overridden.
+
+    Keeps `policy_fallback_budget` clamped to `budget` so the override
+    cannot suddenly raise the policy's fallback above the requested
+    cap.
+    """
+    data = bp.to_dict()
+    data["primitive_budget"] = budget
+    data["early_stop_no_progress"] = budget
+    if data.get("policy_fallback_budget", 0) > budget:
+        data["policy_fallback_budget"] = budget
+    return Blueprint.from_dict(data)
 
 
 def cmd_compare(args: argparse.Namespace) -> int:
@@ -232,7 +266,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_eval = sub.add_parser("eval", help="evaluate a blueprint on a benchmark split")
     p_eval.add_argument("--blueprint", required=True)
     p_eval.add_argument("--bench", default="benchmarks/pybugs")
-    p_eval.add_argument("--split", default="test", choices=["train", "dev", "test"])
+    p_eval.add_argument(
+        "--split",
+        default="test",
+        choices=["train", "dev", "test", "challenge"],
+    )
     p_eval.add_argument("--out", default=None)
     p_eval.set_defaults(func=cmd_eval)
 
@@ -248,7 +286,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_cmp.add_argument("--stem", required=True)
     p_cmp.add_argument("--evolved", required=True)
     p_cmp.add_argument("--bench", default="benchmarks/pybugs")
-    p_cmp.add_argument("--split", default="test", choices=["train", "dev", "test"])
+    p_cmp.add_argument(
+        "--split",
+        default="test",
+        choices=["train", "dev", "test", "challenge"],
+    )
     p_cmp.add_argument("--out", default=None)
     p_cmp.set_defaults(func=cmd_compare)
 

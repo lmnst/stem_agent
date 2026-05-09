@@ -57,12 +57,27 @@ class Blueprint:
     """A specialized-agent configuration.
 
     The stem (initial) blueprint is intentionally domain-agnostic:
-    every primitive equally weighted, conservative budget. It is the
-    no-data baseline.
+    every primitive equally weighted, conservative budget, and an
+    empty `policy_weights` so the runtime falls back to
+    `primitive_priority`.
 
-    `lineage` records the candidate names that produced this blueprint
-    via successive evolve perturbations (newest last). It is purely
-    informational and is not consumed by the agent.
+    `policy_weights[primitive][feature]` is a learned scalar; see
+    `policy.fit_policy` for how it is derived from train + dev
+    observations. When non-empty, the agent's `propose` step computes
+    a per-task score per primitive (sum over features) and reorders
+    the variant queue so primitives with higher per-task scores are
+    tried first.
+
+    `policy_confidence_threshold` is a learned scalar: when the top
+    primitive score for a task is below it, the agent uses
+    `policy_fallback_budget` instead of `primitive_budget`. The two
+    fields together are how the evolved agent gives up cleanly on
+    out-of-bank tasks. The stem leaves both at 0, so the rule is
+    inert (every score >= 0 trivially passes).
+
+    `lineage` records the candidate names that produced this
+    blueprint via successive evolve perturbations (newest last). It
+    is purely informational and is not consumed by the agent.
     """
 
     name: str = "stem"
@@ -73,6 +88,9 @@ class Blueprint:
     )
     primitive_budget: int = 32
     early_stop_no_progress: int = 32
+    policy_weights: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    policy_confidence_threshold: float = 0.0
+    policy_fallback_budget: int = 0
     lineage: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:

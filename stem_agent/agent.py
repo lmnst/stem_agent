@@ -1,12 +1,21 @@
 """The blueprint-driven agent loop.
 
-`solve_task` is used by both the baseline (with the stem blueprint) and
-the evolved agent (with a tuned blueprint). The only thing that changes
-between them is the blueprint.
+`solve_task` is used by both the baseline (with the stem blueprint)
+and the evolved agent (with a tuned blueprint). The only thing that
+changes between them is the blueprint.
 
 The workflow recorded on the blueprint drives which phases run. The
 recognized phases are `run_tests`, `propose`, and `apply_check`; see
 `blueprint.WORKFLOW_STEPS` and `validate_workflow`.
+
+When `blueprint.policy_weights` is non-empty, `propose` extracts
+per-task features from the source, scores each primitive against the
+features, and feeds a per-task ordering into `generate_variants`. If
+the top score falls below `blueprint.policy_confidence_threshold`,
+the agent runs with `policy_fallback_budget` instead of
+`primitive_budget` and notes `policy: low confidence` so the give-up
+is auditable. The stem blueprint leaves the policy fields empty, so
+this entire branch is inert when the stem is the active blueprint.
 """
 from __future__ import annotations
 
@@ -16,6 +25,12 @@ from pathlib import Path
 from typing import List, Optional
 
 from .blueprint import Blueprint, validate_workflow
+from .policy import (
+    extract_features,
+    policy_priority,
+    score_primitive,
+    should_use_fallback_budget,
+)
 from .primitives import Variant, generate_variants
 from .runner import TestResult, read_solution, run_tests, task_workspace, write_solution
 
@@ -42,6 +57,9 @@ class SolveResult:
     first_stdout: str = ""
     first_stderr: str = ""
     effective_budget: int = 0
+    policy_top_score: Optional[float] = None
+    policy_top_primitive: Optional[str] = None
+    policy_low_confidence: bool = False
 
 
 def _append_note(existing: str, addition: str) -> str:
@@ -50,6 +68,41 @@ def _append_note(existing: str, addition: str) -> str:
     if not existing:
         return addition
     return f"{existing}; {addition}"
+
+
+def _resolve_policy(
+    blueprint: Blueprint, source: str
+) -> tuple[List[str], int, bool, Optional[float], Optional[str]]:
+    """Return (priority, effective_budget, low_confidence, top_score, top_primitive).
+
+    When `policy_weights` is empty, the global priority and full
+    budget are used and `top_score`/`top_primitive` are None. When it
+    is non-empty, the per-task ordering takes over and the budget may
+    be reduced if confidence is below threshold.
+    """
+    weights = blueprint.policy_weights or {}
+    full_budget = max(1, blueprint.primitive_budget)
+
+    if not weights:
+        return list(blueprint.primitive_priority), full_budget, False, None, None
+
+    feats = extract_features(source)
+    priority = policy_priority(
+        feats, weights, fallback_priority=blueprint.primitive_priority
+    )
+    scores = [
+        (p, score_primitive(feats, weights.get(p, {})))
+        for p in priority
+    ]
+    top_primitive, top_score = scores[0]
+    low_conf = should_use_fallback_budget(
+        feats, weights, blueprint.policy_confidence_threshold
+    )
+    if low_conf and blueprint.policy_fallback_budget > 0:
+        eff = max(1, min(blueprint.policy_fallback_budget, full_budget))
+    else:
+        eff = full_budget
+    return priority, eff, low_conf, top_score, top_primitive
 
 
 def solve_task(
@@ -69,6 +122,8 @@ def solve_task(
     - `variants exhausted` the queue ran dry before the budget did.
     - `early stop`       `early_stop_no_progress` consecutive misses.
     - `budget exhausted` ran the full budget without a fix.
+    - `policy: low confidence` the policy reduced the budget to the
+      learned fallback because no primitive scored above threshold.
     """
     tid = task_id or Path(task_dir).name
     attempts: List[AttemptLog] = []
@@ -76,10 +131,14 @@ def solve_task(
     t_start = time.perf_counter()
 
     validate_workflow(blueprint.workflow)
-    effective_budget = max(1, blueprint.primitive_budget)
 
     with task_workspace(Path(task_dir)) as ws:
         original = read_solution(ws)
+        priority, effective_budget, low_conf, top_score, top_prim = _resolve_policy(
+            blueprint, original
+        )
+        if low_conf:
+            note = _append_note(note, "policy: low confidence")
 
         first: Optional[TestResult] = None
         variants: List[Variant] = []
@@ -103,10 +162,13 @@ def solve_task(
                         first_stdout=first_stdout,
                         first_stderr=first_stderr,
                         effective_budget=effective_budget,
+                        policy_top_score=top_score,
+                        policy_top_primitive=top_prim,
+                        policy_low_confidence=low_conf,
                     )
 
             elif step == "propose":
-                variants = generate_variants(original, blueprint.primitive_priority)
+                variants = generate_variants(original, priority)
 
             elif step == "apply_check":
                 if not variants:
@@ -121,6 +183,9 @@ def solve_task(
                         first_stdout=first_stdout,
                         first_stderr=first_stderr,
                         effective_budget=effective_budget,
+                        policy_top_score=top_score,
+                        policy_top_primitive=top_prim,
+                        policy_low_confidence=low_conf,
                     )
 
                 window = variants[:effective_budget]
@@ -151,6 +216,9 @@ def solve_task(
                             first_stdout=first_stdout,
                             first_stderr=first_stderr,
                             effective_budget=effective_budget,
+                            policy_top_score=top_score,
+                            policy_top_primitive=top_prim,
+                            policy_low_confidence=low_conf,
                         )
                     no_progress += 1
                     # Early-stop only fires while there are still untried
@@ -181,6 +249,9 @@ def solve_task(
                     first_stdout=first_stdout,
                     first_stderr=first_stderr,
                     effective_budget=effective_budget,
+                    policy_top_score=top_score,
+                    policy_top_primitive=top_prim,
+                    policy_low_confidence=low_conf,
                 )
 
         # Workflow finished without an apply_check phase. validate_workflow
@@ -196,6 +267,9 @@ def solve_task(
             first_stdout=first_stdout,
             first_stderr=first_stderr,
             effective_budget=effective_budget,
+            policy_top_score=top_score,
+            policy_top_primitive=top_prim,
+            policy_low_confidence=low_conf,
         )
 
 

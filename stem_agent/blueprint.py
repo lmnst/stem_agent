@@ -33,7 +33,7 @@ PRIMITIVE_NAMES: List[str] = [
 
 
 WORKFLOW_DEFAULT: List[str] = ["run_tests", "propose", "apply_check"]
-WORKFLOW_STEPS = frozenset({"run_tests", "localize", "propose", "apply_check"})
+WORKFLOW_STEPS = frozenset({"run_tests", "propose", "apply_check"})
 _WORKFLOW_REQUIRED = ("run_tests", "propose", "apply_check")
 
 
@@ -42,8 +42,7 @@ def validate_workflow(workflow: List[str]) -> None:
 
     Unknown steps raise; required steps must all be present. Order is
     not enforced beyond that, but `agent.solve_task` reads steps in
-    declared order, so e.g. `localize` must precede `propose` to take
-    effect.
+    declared order.
     """
     unknown = [s for s in workflow if s not in WORKFLOW_STEPS]
     if unknown:
@@ -57,8 +56,9 @@ def validate_workflow(workflow: List[str]) -> None:
 class Blueprint:
     """A specialized-agent configuration.
 
-    The stem (initial) blueprint is intentionally domain-agnostic: every
-    primitive equally weighted, no localization, conservative budget.
+    The stem (initial) blueprint is intentionally domain-agnostic:
+    every primitive equally weighted, conservative budget. It is the
+    no-data baseline.
 
     `lineage` records the candidate names that produced this blueprint
     via successive evolve perturbations (newest last). It is purely
@@ -72,8 +72,6 @@ class Blueprint:
         default_factory=lambda: list(PRIMITIVE_NAMES)
     )
     primitive_budget: int = 32
-    use_llm_proposal: bool = False
-    llm_system_prompt: str = ""
     early_stop_no_progress: int = 32
     lineage: List[str] = field(default_factory=list)
 
@@ -116,17 +114,13 @@ class Blueprint:
 class DomainProfile:
     """Output of the domain-analysis step.
 
-    `primitive_frequencies` is normalized so values sum to 1 (or 0 if no
-    fixes were observed). `localization_useful` is set when test
-    tracebacks consistently reference solution.py source lines.
-    `recommended_budget` is observed-iters-to-solve-max plus headroom:
-    the agent's domain-aware sense of how many candidates it should be
-    willing to try before giving up.
+    `primitive_frequencies` is normalized so values sum to 1 (or 0 if
+    no fixes were observed). `recommended_budget` is observed
+    iters-to-solve plus headroom: the agent's domain-aware sense of
+    how many candidates it should be willing to try before giving up.
     """
 
     primitive_frequencies: Dict[str, float] = field(default_factory=dict)
-    localization_useful: bool = False
-    llm_hint: str = ""
     sample_size: int = 0
     recommended_budget: int = 0
     max_iters_observed: int = 0

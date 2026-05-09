@@ -142,8 +142,6 @@ def test_evolved_blueprint_differs_from_stem_on_agent_read_field(tmp_path):
         "workflow",
         "primitive_priority",
         "primitive_budget",
-        "use_llm_proposal",
-        "llm_system_prompt",
         "early_stop_no_progress",
     )
     differences = [f for f in agent_fields if getattr(stem, f) != getattr(best, f)]

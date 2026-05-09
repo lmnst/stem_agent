@@ -1,13 +1,10 @@
 """Candidate generation, dev-set selection, and stopping rules.
 
 The candidate space is an explicit, finite grid: priority orderings
-crossed with budgets and a localization toggle (expressed as workflow
-membership of `localize`). LLM-proposal is a separate flag toggled by
-the CLI's `--use-llm`. This is the "evolution" loop: each generation
-scores its candidates on the dev set, takes the best (ties broken by
-mean iterations-to-solve, then by budget closeness to the
-profile-recommended budget), then perturbs the top survivors to seed
-the next generation.
+crossed with budgets. Each generation scores its candidates on the dev
+set, takes the best (ties broken by mean iterations-to-solve, then by
+budget closeness to the profile-recommended budget), then perturbs the
+top survivors to seed the next generation.
 
 Stopping rules:
 - Stop when no improvement for `patience` consecutive generations.
@@ -27,11 +24,6 @@ from .blueprint import (
     Blueprint,
     DomainProfile,
 )
-from .llm import LLMClient
-
-
-# Workflow that runs the localize step before propose.
-WORKFLOW_LOCALIZED: List[str] = ["run_tests", "localize", "propose", "apply_check"]
 
 
 @dataclass
@@ -61,12 +53,12 @@ def stem_blueprint() -> Blueprint:
     """The initial domain-agnostic stem agent: what the baseline runs.
 
     Two deliberately unspecialized choices:
-    - **Alphabetical priority** over primitives. The order isn't curated;
-      it's what you get from `sorted(PRIMITIVE_NAMES)`. The stem has no
-      reason to prefer one primitive class over another.
+    - **Alphabetical priority** over primitives. The order is what
+      `sorted(PRIMITIVE_NAMES)` produces. The stem has no reason to
+      prefer one primitive class over another.
     - **Conservative budget = 8.** Without observing the domain, the
-      stem doesn't know how hard tasks are. Eight attempts is enough to
-      try the easy wins; harder tasks will run out.
+      stem doesn't know how hard tasks are. Eight attempts is enough
+      to try the easy wins; harder tasks will run out.
     """
     return Blueprint(
         name="stem",
@@ -77,27 +69,17 @@ def stem_blueprint() -> Blueprint:
         workflow=list(WORKFLOW_DEFAULT),
         primitive_priority=sorted(PRIMITIVE_NAMES),
         primitive_budget=8,
-        use_llm_proposal=False,
         early_stop_no_progress=8,
     )
 
 
-def _initial_candidates(
-    profile: DomainProfile,
-    *,
-    use_llm: bool,
-) -> List[Blueprint]:
+def _initial_candidates(profile: DomainProfile) -> List[Blueprint]:
     """Candidate blueprints derived from the domain profile.
 
     Priority orderings: `ranked` from empirical fix-frequency, `alpha`
     as the no-domain-knowledge baseline, `reverse` as an intentionally
     adversarial control to verify the dev-set selection is doing real
     work. Budgets: 8, the profile-recommended budget, and twice that.
-    Localization is *not* an axis of the candidate grid: the soft prior
-    only changes mean iterations on the existing benchmark and never
-    independently wins selection (see writeup section 5). Users can
-    still author a localized blueprint by including `localize` in the
-    workflow; the agent honors it.
     """
     ranked = profile.ranked_primitives()
     alpha = sorted(PRIMITIVE_NAMES)
@@ -110,7 +92,7 @@ def _initial_candidates(
     out: List[Blueprint] = []
     for plabel, pri in priorities:
         for budget in budgets:
-            name = f"cand-{plabel}-b{budget}-llm{int(use_llm)}"
+            name = f"cand-{plabel}-b{budget}"
             out.append(
                 Blueprint(
                     name=name,
@@ -118,8 +100,6 @@ def _initial_candidates(
                     workflow=list(WORKFLOW_DEFAULT),
                     primitive_priority=list(pri),
                     primitive_budget=budget,
-                    use_llm_proposal=use_llm,
-                    llm_system_prompt=profile.llm_hint or "",
                     early_stop_no_progress=budget,
                     lineage=[],
                 )
@@ -140,17 +120,16 @@ def _next_generation(
     """Perturb the top survivors to explore their neighborhood.
 
     Perturbations are *expansive* (raise budget, promote frequently
-    fixing primitives) rather than contractive: the dev set may be easy
-    but the test set isn't necessarily. Budget growth is capped at four
-    times the profile-recommended budget so a saturated dev-set
-    pass-rate cannot drive the persisted blueprint's budget arbitrarily
-    high; the cap is what stops the doubling perturbation.
+    fixing primitives) rather than contractive: the dev set may be
+    easy but the test set isn't necessarily. Budget growth is capped
+    at four times the profile-recommended budget so a saturated
+    dev-set pass-rate cannot drive the persisted blueprint's budget
+    arbitrarily high.
     """
     budget_cap = max(8, profile.recommended_budget * 4)
     out: List[Blueprint] = []
     for cs in survivors:
         bp = cs.blueprint
-        # Expand budget, capped to avoid drifting far past the profile-justified ceiling.
         next_budget = min(bp.primitive_budget * 2, budget_cap)
         if next_budget > bp.primitive_budget:
             child_name = bp.name + "-x2"
@@ -163,7 +142,6 @@ def _next_generation(
                     lineage=list(bp.lineage) + [bp.name],
                 )
             )
-        # Promote profile-top-5 to the head, keep tail order.
         head = profile.ranked_primitives()[:5]
         tail = [p for p in bp.primitive_priority if p not in head]
         promoted = list(head) + tail
@@ -184,7 +162,6 @@ def _next_generation(
             tuple(b.primitive_priority),
             b.primitive_budget,
             b.early_stop_no_progress,
-            b.use_llm_proposal,
             tuple(b.workflow),
         )
         if key in seen:
@@ -198,20 +175,17 @@ def score_blueprint(
     bp: Blueprint,
     dev_dir: Path,
     *,
-    llm: Optional[LLMClient] = None,
     target_budget: int = 8,
     generation: int = 0,
 ) -> CandidateScore:
-    results = evaluate_split(dev_dir, bp, llm=llm)
+    results = evaluate_split(dev_dir, bp)
     n_total = len(results)
     n_solved = sum(1 for r in results if r.solved)
     pass_rate = (n_solved / n_total) if n_total else 0.0
     iters = [r.iterations for r in results if r.solved]
     if n_solved == 0:
         # No solves: declare mean iters as infinity so candidates that
-        # fail every task never beat anything on the iters tiebreaker
-        # (this ordering bug used to flip the sort key when budgets were
-        # different but every candidate had pass_rate=0).
+        # fail every task never beat anything on the iters tiebreaker.
         mean_iters = math.inf
     else:
         mean_iters = sum(iters) / len(iters)
@@ -230,30 +204,26 @@ def evolve(
     profile: DomainProfile,
     dev_dir: Path,
     *,
-    llm: Optional[LLMClient] = None,
     max_generations: int = 4,
     patience: int = 2,
     survivors_per_gen: int = 2,
 ) -> Tuple[Blueprint, List[CandidateScore]]:
     """Run generational selection over candidate blueprints.
 
-    Returns the best-scoring blueprint and the full per-candidate score
-    history (for the artifacts/log). The returned blueprint is renamed
-    to `evolved` and gets its full perturbation chain recorded in
-    `lineage`.
+    Returns the best-scoring blueprint and the full per-candidate
+    score history (for the artifacts/log). The returned blueprint is
+    renamed to `evolved` and gets its full perturbation chain recorded
+    in `lineage`.
     """
-    use_llm = llm is not None and llm.available()
     target_budget = max(profile.recommended_budget, 8)
-    pool = _initial_candidates(profile, use_llm=use_llm)
+    pool = _initial_candidates(profile)
     history: List[CandidateScore] = []
     best: Optional[CandidateScore] = None
     no_improve = 0
 
     for gen in range(max_generations):
         scored = [
-            score_blueprint(
-                c, dev_dir, llm=llm, target_budget=target_budget, generation=gen
-            )
+            score_blueprint(c, dev_dir, target_budget=target_budget, generation=gen)
             for c in pool
         ]
         scored.sort(key=lambda s: s.key())

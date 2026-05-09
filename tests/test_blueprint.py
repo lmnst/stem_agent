@@ -15,8 +15,6 @@ def test_blueprint_default_is_domain_agnostic():
     b = Blueprint()
     assert b.primitive_priority == PRIMITIVE_NAMES
     assert b.workflow == WORKFLOW_DEFAULT
-    assert b.use_llm_proposal is False
-    assert b.llm_system_prompt == ""
     assert b.lineage == []
 
 
@@ -60,7 +58,6 @@ def test_blueprint_from_json_strict_default(tmp_path):
 
 def test_validate_workflow_accepts_default():
     validate_workflow(list(WORKFLOW_DEFAULT))
-    validate_workflow(["run_tests", "localize", "propose", "apply_check"])
 
 
 def test_validate_workflow_rejects_unknown_step():
@@ -71,6 +68,12 @@ def test_validate_workflow_rejects_unknown_step():
 def test_validate_workflow_rejects_missing_required():
     with pytest.raises(ValueError):
         validate_workflow(["run_tests", "apply_check"])  # missing propose
+
+
+def test_validate_workflow_rejects_legacy_localize_step():
+    """`localize` was removed; loading old blueprints that include it raises."""
+    with pytest.raises(ValueError):
+        validate_workflow(["run_tests", "localize", "propose", "apply_check"])
 
 
 def test_domain_profile_ranked():
@@ -96,8 +99,6 @@ def test_domain_profile_empty_ranked_uses_default_order():
 def test_domain_profile_roundtrip(tmp_path):
     p = DomainProfile(
         primitive_frequencies={"shift_const_pm1": 1.0},
-        localization_useful=True,
-        llm_hint="some hint",
         sample_size=5,
         notes=["a", "b"],
     )

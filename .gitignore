@@ -9,3 +9,4 @@ venv/
 /*.log
 build/
 dist/
+artifacts/

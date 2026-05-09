@@ -88,53 +88,52 @@ def test_solve_already_passing(tmp_path):
     assert res.note == "already passing"
 
 
-def test_workflow_change_alters_behavior(tmp_path):
-    """Adding `localize` to the workflow changes pass/fail at a tight budget.
+def test_priority_change_alters_pass_at_tight_budget(tmp_path):
+    """Reordering primitive_priority must change pass/fail at tight budget.
 
-    Source has constants on two lines; the bug raises an IndexError on
-    the line whose fix lives at the tail of the natural variant order.
-    With the default workflow, the budget is consumed mutating the
-    irrelevant line. With `localize` first, the soft prior bumps the
-    bug line's variants ahead and the fix is found inside budget.
+    Source has only a `<` and only one constant; budget=1. With
+    `swap_compare_strict` first the fix lands on attempt 1; with the
+    primitive at the tail of priority it never runs.
     """
     td = _make_task(
         tmp_path,
         "task",
         """\
-        def f(x):
-            items = [10, 20, 30]
-            return items[x - 5]
+        def upto(n):
+            i = 1
+            out = []
+            while i < n:
+                out.append(i)
+                i += 1
+            return out
         """,
         """\
-        from solution import f
+        from solution import upto
 
 
         def test_basic():
-            assert f(8) == 30
+            assert upto(3) == [1, 2, 3]
         """,
     )
+    cmp_first = ["swap_compare_strict"] + [
+        p for p in PRIMITIVE_NAMES if p != "swap_compare_strict"
+    ]
+    cmp_last = [p for p in PRIMITIVE_NAMES if p != "swap_compare_strict"] + [
+        "swap_compare_strict"
+    ]
 
-    bp_plain = Blueprint(
-        name="plain",
-        workflow=["run_tests", "propose", "apply_check"],
-        primitive_priority=list(PRIMITIVE_NAMES),
-        primitive_budget=2,
-        early_stop_no_progress=2,
+    bp_first = Blueprint(
+        name="first", primitive_priority=cmp_first, primitive_budget=1, early_stop_no_progress=1
     )
-    bp_loc = Blueprint(
-        name="loc",
-        workflow=["run_tests", "localize", "propose", "apply_check"],
-        primitive_priority=list(PRIMITIVE_NAMES),
-        primitive_budget=2,
-        early_stop_no_progress=2,
+    bp_last = Blueprint(
+        name="last", primitive_priority=cmp_last, primitive_budget=1, early_stop_no_progress=1
     )
+    res_first = solve_task(td, bp_first, task_id="task")
+    res_last = solve_task(td, bp_last, task_id="task")
 
-    res_plain = solve_task(td, bp_plain, task_id="task")
-    res_loc = solve_task(td, bp_loc, task_id="task")
-
-    assert res_plain.solved is False, "plain workflow should run out of budget"
-    assert res_loc.solved is True, "localize workflow should fit the fix in budget"
-    assert res_loc.iterations <= 2
+    assert res_first.solved is True
+    assert res_first.iterations == 1
+    assert res_last.solved is False
 
 
 def test_invalid_workflow_raises(tmp_path):
@@ -147,3 +146,19 @@ def test_invalid_workflow_raises(tmp_path):
     bp = Blueprint(workflow=["run_tests", "do_magic", "apply_check"])
     with pytest.raises(ValueError):
         solve_task(td, bp, task_id="task")
+
+
+def test_solve_records_effective_budget(tmp_path):
+    td = _make_task(
+        tmp_path,
+        "task",
+        "def f():\n    return 1\n",
+        "from solution import f\n\ndef test_a():\n    assert f() == 2\n",
+    )
+    bp = Blueprint(
+        primitive_priority=list(PRIMITIVE_NAMES),
+        primitive_budget=5,
+        early_stop_no_progress=5,
+    )
+    res = solve_task(td, bp, task_id="task")
+    assert res.effective_budget == 5

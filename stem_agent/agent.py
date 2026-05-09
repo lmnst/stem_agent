@@ -14,8 +14,15 @@ features, and feeds a per-task ordering into `generate_variants`. If
 the top score falls below `blueprint.policy_confidence_threshold`,
 the agent runs with `policy_fallback_budget` instead of
 `primitive_budget` and notes `policy: low confidence` so the give-up
-is auditable. The stem blueprint leaves the policy fields empty, so
-this entire branch is inert when the stem is the active blueprint.
+is auditable.
+
+This per-task policy is a *rejected experiment*. Both the stem
+blueprint and the deployed evolved blueprint leave the policy fields
+empty, so the entire policy branch is inert in the deployed
+configuration. The branch is preserved only so the perturbation
+report (`stem_agent.perturb`) can build the rejected configuration
+as a labelled ablation row. See
+`docs/evaluation/perturbation_report.json` for the rejection table.
 """
 from __future__ import annotations
 

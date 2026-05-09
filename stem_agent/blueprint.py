@@ -52,6 +52,13 @@ def validate_workflow(workflow: List[str]) -> None:
         raise ValueError(f"workflow missing required step(s): {missing}")
 
 
+_POLICY_FIELDS = (
+    "policy_weights",
+    "policy_confidence_threshold",
+    "policy_fallback_budget",
+)
+
+
 @dataclass
 class Blueprint:
     """A specialized-agent configuration.
@@ -61,19 +68,15 @@ class Blueprint:
     empty `policy_weights` so the runtime falls back to
     `primitive_priority`.
 
-    `policy_weights[primitive][feature]` is a learned scalar; see
-    `policy.fit_policy` for how it is derived from train + dev
-    observations. When non-empty, the agent's `propose` step computes
-    a per-task score per primitive (sum over features) and reorders
-    the variant queue so primitives with higher per-task scores are
-    tried first.
-
-    `policy_confidence_threshold` is a learned scalar: when the top
-    primitive score for a task is below it, the agent uses
-    `policy_fallback_budget` instead of `primitive_budget`. The two
-    fields together are how the evolved agent gives up cleanly on
-    out-of-bank tasks. The stem leaves both at 0, so the rule is
-    inert (every score >= 0 trivially passes).
+    The `policy_*` fields back a per-task primitive policy that was
+    attempted as an evolution outcome. The deployed evolved blueprint
+    leaves all three at empty/zero defaults because controlled
+    ablation rejected the policy on the held-out test split (see
+    `docs/evaluation/perturbation_report.json`). The fields stay on
+    the dataclass so the perturbation report can construct the
+    rejected configuration as an ablation row, but they are never
+    serialized when empty: a deployed blueprint must not advertise
+    fields the deployed strategy does not consume.
 
     `lineage` records the candidate names that produced this
     blueprint via successive evolve perturbations (newest last). It
@@ -94,7 +97,11 @@ class Blueprint:
     lineage: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        if not self.policy_weights:
+            for k in _POLICY_FIELDS:
+                d.pop(k, None)
+        return d
 
     def to_json(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

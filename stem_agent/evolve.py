@@ -2,21 +2,26 @@
 
 The candidate space is an explicit, finite grid: priority orderings
 crossed with budgets. Each generation scores its candidates on the
-dev set, takes the best (ties broken by mean iterations-to-solve,
-then by budget closeness to the profile-recommended budget), then
-perturbs the top survivors to seed the next generation.
+dev set, takes the best, then perturbs the top survivors to seed the
+next generation.
 
-After selection, a per-task primitive policy is fit on the combined
-train + dev observations and attached to the returned blueprint. The
-policy comprises:
-- `policy_weights[primitive][feature]`, a learned weight matrix that
-  the agent uses at runtime to re-rank primitives per task;
-- `policy_confidence_threshold`, the score below which a task is
-  treated as low-confidence;
-- `policy_fallback_budget`, used when the policy is low-confidence.
+Selection key (descending priority): (1) max dev pass rate; (2) min
+total *actual* attempts spent across the dev split (failed tasks
+counted at the iters they actually consumed); (3) closeness to the
+profile-recommended budget; (4) smaller raw budget. The actual-attempt
+metric replaced an earlier mean-iters-on-solved metric because the
+latter let a worse blueprint flatter its mean by averaging only its
+easy solves. The deployed strategy is the simplest blueprint that
+ties on dev pass rate and minimizes actual attempts.
 
-The stem blueprint (`stem_blueprint`) leaves all three at empty/zero
-defaults, so the policy branch is inert under the stem.
+The deployed evolved blueprint stays purely a priority+budget
+configuration. An earlier iteration attached a per-task primitive
+policy fit on train + dev observations; controlled ablation on the
+held-out test split rejected it (see
+`docs/evaluation/perturbation_report.json`). The policy code path
+remains in `agent.py` and `policy.py` so the perturbation report can
+reconstruct the rejected configuration as a labelled ablation row,
+but no policy fields are written into the deployed blueprint.
 
 Stopping rules:
 - Stop when no improvement for `patience` consecutive generations.
@@ -24,24 +29,16 @@ Stopping rules:
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from .agent import SolveResult, evaluate_split
+from .agent import evaluate_split
 from .blueprint import (
     PRIMITIVE_NAMES,
     WORKFLOW_DEFAULT,
     Blueprint,
     DomainProfile,
-)
-from .policy import (
-    Observation,
-    extract_features,
-    fit_fallback_budget_from_iters,
-    fit_policy,
-    fit_threshold,
 )
 
 
@@ -49,7 +46,7 @@ from .policy import (
 class CandidateScore:
     blueprint: Blueprint
     pass_rate: float
-    mean_iters: float
+    actual_attempts_sum: int
     n_solved: int
     n_total: int
     target_budget: int
@@ -59,14 +56,10 @@ class CandidateScore:
     per_task: List[Dict[str, object]] = field(default_factory=list)
     stop_condition: Optional[str] = None
 
-    def key(self) -> Tuple[float, float, int, int]:
-        # Sort by descending pass_rate, then ascending mean_iters, then by
-        # closeness to the profile-recommended budget (so saturated dev
-        # runs do not reward wasteful budget growth), then by smaller
-        # raw budget to break the remaining ties deterministically.
+    def key(self) -> Tuple[float, int, int, int]:
         return (
             -self.pass_rate,
-            self.mean_iters,
+            self.actual_attempts_sum,
             abs(self.blueprint.primitive_budget - self.target_budget),
             self.blueprint.primitive_budget,
         )
@@ -221,13 +214,7 @@ def score_blueprint(
     n_total = len(results)
     n_solved = sum(1 for r in results if r.solved)
     pass_rate = (n_solved / n_total) if n_total else 0.0
-    iters = [r.iterations for r in results if r.solved]
-    if n_solved == 0:
-        # No solves: declare mean iters as infinity so candidates that
-        # fail every task never beat anything on the iters tiebreaker.
-        mean_iters = math.inf
-    else:
-        mean_iters = sum(iters) / len(iters)
+    actual_attempts_sum = sum(r.iterations for r in results)
     per_task = [
         {
             "id": r.task_id,
@@ -241,7 +228,7 @@ def score_blueprint(
     return CandidateScore(
         blueprint=bp,
         pass_rate=pass_rate,
-        mean_iters=mean_iters,
+        actual_attempts_sum=actual_attempts_sum,
         n_solved=n_solved,
         n_total=n_total,
         target_budget=target_budget,
@@ -252,39 +239,10 @@ def score_blueprint(
     )
 
 
-def _gather_observations(
-    train_dir: Path,
-    train_results: List[SolveResult],
-    dev_dir: Path,
-    dev_results: List[SolveResult],
-) -> Tuple[List[Observation], List[int]]:
-    """Build (features, fixing_primitive) observations across train + dev.
-
-    Features are extracted from the *original* (buggy) source of each
-    task, not from any variant the probe applied: the policy decides
-    what to *try first*, before any mutation. The accompanying iters
-    list (one per solved task) feeds `fit_fallback_budget_from_iters`.
-    """
-    obs: List[Observation] = []
-    iters: List[int] = []
-    for split_dir, results in [(train_dir, train_results), (dev_dir, dev_results)]:
-        for r in results:
-            task_path = Path(split_dir) / r.task_id / "solution.py"
-            if not task_path.exists():
-                continue
-            feats = extract_features(task_path.read_text(encoding="utf-8"))
-            obs.append((feats, r.fixing_primitive if r.solved else None))
-            if r.solved:
-                iters.append(r.iterations)
-    return obs, iters
-
-
 def evolve(
     profile: DomainProfile,
     dev_dir: Path,
     *,
-    train_dir: Optional[Path] = None,
-    train_results: Optional[List[SolveResult]] = None,
     max_generations: int = 4,
     patience: int = 2,
     survivors_per_gen: int = 2,
@@ -292,17 +250,12 @@ def evolve(
     """Run generational selection over candidate blueprints.
 
     Returns the best-scoring blueprint and the full per-candidate
-    score history. After the dev winner is chosen, a per-task
-    primitive policy is fit on the union of train probe results and
-    the dev winner's per-task results, and attached to the returned
-    blueprint as `policy_weights` / `policy_confidence_threshold` /
-    `policy_fallback_budget`.
-
-    `train_dir` and `train_results` are needed to fit the policy.
-    They are optional (so existing tests that only pass `profile` and
-    `dev_dir` keep working): when missing, the policy fields stay
-    empty and the evolved blueprint differs from the stem only on
-    priority/budget.
+    score history. The deployed blueprint is the dev winner with no
+    policy attached: the per-task policy was attempted in an earlier
+    iteration of this project, but controlled ablation on test
+    rejected it. See `docs/evaluation/perturbation_report.json` for
+    the rejection table; the perturbation report constructs the
+    rejected configuration as a labelled ablation row.
     """
     target_budget = max(profile.recommended_budget, 8)
     pool: List[PoolEntry] = _initial_candidates(profile)
@@ -348,25 +301,10 @@ def evolve(
         selected,
         name="evolved",
         description=(
-            "Evolved blueprint chosen by dev-set selection, with a "
-            "per-task primitive policy fit on train + dev features."
+            "Evolved blueprint: priority + budget chosen by dev-set "
+            "selection. Per-task policy attempted but rejected by "
+            "ablation; not deployed."
         ),
         lineage=list(selected.lineage) + [selected.name],
     )
-
-    if train_dir is not None and train_results is not None:
-        dev_results = evaluate_split(dev_dir, selected)
-        observations, iters = _gather_observations(
-            train_dir, train_results, dev_dir, dev_results
-        )
-        weights = fit_policy(observations)
-        threshold = fit_threshold(observations, weights)
-        fallback = fit_fallback_budget_from_iters(iters)
-        chosen = _clone(
-            chosen,
-            policy_weights=weights,
-            policy_confidence_threshold=threshold,
-            policy_fallback_budget=fallback,
-        )
-
     return chosen, history

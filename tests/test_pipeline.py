@@ -132,15 +132,8 @@ def test_two_consecutive_runs_produce_identical_task_records(tmp_path):
 def test_evolved_blueprint_differs_from_stem_on_agent_read_field(tmp_path):
     bench = tmp_path / "bench"
     _build_bench(bench)
-    profile, train_results = analyze_domain(bench / "train")
-    best, _ = evolve(
-        profile,
-        bench / "dev",
-        train_dir=bench / "train",
-        train_results=train_results,
-        max_generations=2,
-        patience=2,
-    )
+    profile, _ = analyze_domain(bench / "train")
+    best, _ = evolve(profile, bench / "dev", max_generations=2, patience=2)
     stem = stem_blueprint()
 
     # Fields that solve_task actually reads. `name`, `description`, and
@@ -161,31 +154,42 @@ def test_evolved_blueprint_differs_from_stem_on_agent_read_field(tmp_path):
     )
 
 
-def test_evolved_carries_a_learned_artifact_absent_from_stem(tmp_path):
-    """Acceptance pin: the evolved blueprint must contain a non-empty
-    `policy_weights` dict, derived from train+dev observations,
-    serialized in the JSON, and absent from the stem."""
+def test_deployed_blueprint_carries_no_policy_fields(tmp_path):
+    """Path B contract: the deployed evolved blueprint must not carry
+    `policy_weights`, `policy_confidence_threshold`, or
+    `policy_fallback_budget`. The per-task policy was attempted in an
+    earlier iteration; controlled ablation rejected it on the
+    held-out test split (see `docs/evaluation/perturbation_report.json`).
+    The deployed JSON must not advertise fields the deployed
+    strategy does not consume.
+    """
+    import json as _json
+
     bench = tmp_path / "bench"
     _build_bench(bench)
-    profile, train_results = analyze_domain(bench / "train")
-    best, _ = evolve(
-        profile,
-        bench / "dev",
-        train_dir=bench / "train",
-        train_results=train_results,
-        max_generations=1,
-        patience=1,
-    )
-    stem = stem_blueprint()
-    assert stem.policy_weights == {}
-    assert best.policy_weights, "evolved must have learned policy weights"
-    # Round-trip through JSON to confirm serialization works.
+    profile, _ = analyze_domain(bench / "train")
+    best, _ = evolve(profile, bench / "dev", max_generations=1, patience=1)
+    assert best.policy_weights == {}
+    assert best.policy_confidence_threshold == 0.0
+    assert best.policy_fallback_budget == 0
+
     p = tmp_path / "evolved.json"
     best.to_json(p)
+    raw = _json.loads(p.read_text(encoding="utf-8"))
+    for forbidden in (
+        "policy_weights",
+        "policy_confidence_threshold",
+        "policy_fallback_budget",
+    ):
+        assert forbidden not in raw, (
+            f"deployed blueprint JSON must not contain {forbidden!r}; "
+            f"found keys: {sorted(raw)}"
+        )
+
     reloaded = Blueprint.from_json(p)
-    assert reloaded.policy_weights == best.policy_weights
-    assert reloaded.policy_confidence_threshold == best.policy_confidence_threshold
-    assert reloaded.policy_fallback_budget == best.policy_fallback_budget
+    assert reloaded.policy_weights == {}
+    assert reloaded.policy_confidence_threshold == 0.0
+    assert reloaded.policy_fallback_budget == 0
 
 
 def test_two_consecutive_evolves_produce_byte_identical_blueprint(tmp_path):
@@ -193,27 +197,13 @@ def test_two_consecutive_evolves_produce_byte_identical_blueprint(tmp_path):
     bench = tmp_path / "bench"
     _build_bench(bench)
 
-    profile_a, results_a = analyze_domain(bench / "train")
-    bp_a, _ = evolve(
-        profile_a,
-        bench / "dev",
-        train_dir=bench / "train",
-        train_results=results_a,
-        max_generations=2,
-        patience=2,
-    )
+    profile_a, _ = analyze_domain(bench / "train")
+    bp_a, _ = evolve(profile_a, bench / "dev", max_generations=2, patience=2)
     out_a = tmp_path / "a.json"
     bp_a.to_json(out_a)
 
-    profile_b, results_b = analyze_domain(bench / "train")
-    bp_b, _ = evolve(
-        profile_b,
-        bench / "dev",
-        train_dir=bench / "train",
-        train_results=results_b,
-        max_generations=2,
-        patience=2,
-    )
+    profile_b, _ = analyze_domain(bench / "train")
+    bp_b, _ = evolve(profile_b, bench / "dev", max_generations=2, patience=2)
     out_b = tmp_path / "b.json"
     bp_b.to_json(out_b)
 

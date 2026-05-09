@@ -1,9 +1,8 @@
-"""Command-line entry point: `stem evolve | eval | solve | compare`."""
+"""Command-line entry point: `stem evolve | eval | solve | compare | perturb`."""
 from __future__ import annotations
 
 import argparse
 import json
-import math
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -12,26 +11,29 @@ from .agent import SolveResult, evaluate_split, solve_task
 from .analysis import analyze_domain
 from .blueprint import Blueprint
 from .evolve import evolve, stem_blueprint
+from .perturb import PerturbConfig, build_report, render_table, write_report
 from .stats import wilson_interval
 
 
 def _summarize(results: List[SolveResult], *, budget: Optional[int] = None) -> dict:
-    """Build a per-blueprint summary with both iter-mean denominators.
+    """Per-blueprint summary with separate actual and effective-budget metrics.
 
-    `mean_iters_solved` is the historical metric: averaged only over
-    tasks the blueprint solved. `mean_iters_all_with_failed_at_budget`
-    counts unsolved tasks at the effective per-task budget instead, so
-    a blueprint that solves more tasks isn't unfairly penalized for
-    having to count its harder solves while a worse blueprint averages
-    only its easy ones. We report both.
+    `actual_attempts_sum` and `mean_iters_actual_all` count what the
+    agent actually ran, including failed tasks that hit early-stop or
+    ran out of variants before the budget. `eff_budget_attempts_sum`
+    and `mean_iters_eff_all` charge failed tasks at their effective
+    per-task budget instead, so a blueprint that gives up faster does
+    not flatter its mean by averaging only its easy solves. Both are
+    reported alongside the classical `mean_iters_solved`.
     """
     n = len(results)
     n_solved = sum(1 for r in results if r.solved)
     iters_solved = [r.iterations for r in results if r.solved]
-    iters_all = [
+    actual_sum = sum(r.iterations for r in results)
+    eff_sum = sum(
         r.iterations if r.solved else (r.effective_budget or budget or 0)
         for r in results
-    ]
+    )
     durations = [r.duration_s for r in results]
     lo, hi = wilson_interval(n_solved, n)
     return {
@@ -39,14 +41,17 @@ def _summarize(results: List[SolveResult], *, budget: Optional[int] = None) -> d
         "n_solved": n_solved,
         "pass_rate": (n_solved / n) if n else 0.0,
         "pass_rate_ci95": [lo, hi],
+        "actual_attempts_sum": actual_sum,
+        "eff_budget_attempts_sum": eff_sum,
         "mean_iters_solved": (sum(iters_solved) / len(iters_solved)) if iters_solved else 0.0,
-        "mean_iters_all_with_failed_at_budget": (sum(iters_all) / n) if n else 0.0,
+        "mean_iters_actual_all": (actual_sum / n) if n else 0.0,
+        "mean_iters_eff_all": (eff_sum / n) if n else 0.0,
         "mean_wall_s": (sum(durations) / n) if n else 0.0,
         "tasks": [
             {
                 "id": r.task_id,
                 "solved": r.solved,
-                "iters": r.iterations,
+                "actual_attempts": r.iterations,
                 "effective_budget": r.effective_budget,
                 "duration_s": round(r.duration_s, 3),
                 "fix": r.fixing_primitive,
@@ -66,7 +71,7 @@ def cmd_evolve(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print("[1/3] domain analysis (probe over train)", file=sys.stderr)
-    profile, train_results = analyze_domain(bench / "train")
+    profile, _ = analyze_domain(bench / "train")
     profile.to_json(out_dir / "profile.json")
     print(f"  primitive_frequencies: {profile.primitive_frequencies}", file=sys.stderr)
     print(f"  recommended_budget:    {profile.recommended_budget}", file=sys.stderr)
@@ -75,8 +80,6 @@ def cmd_evolve(args: argparse.Namespace) -> int:
     best_bp, history = evolve(
         profile,
         bench / "dev",
-        train_dir=bench / "train",
-        train_results=train_results,
         max_generations=args.max_generations,
         patience=args.patience,
     )
@@ -91,8 +94,7 @@ def cmd_evolve(args: argparse.Namespace) -> int:
             "lineage": list(s.blueprint.lineage),
             "blueprint": s.blueprint.to_dict(),
             "pass_rate": s.pass_rate,
-            # math.inf marks "no solves"; keep the JSON valid by writing null.
-            "mean_iters": None if math.isinf(s.mean_iters) else s.mean_iters,
+            "actual_attempts_sum": s.actual_attempts_sum,
             "n_solved": s.n_solved,
             "n_total": s.n_total,
             "per_task": s.per_task,
@@ -108,21 +110,11 @@ def cmd_evolve(args: argparse.Namespace) -> int:
     stem_blueprint().to_json(out_dir / "stem_blueprint.json")
 
     print(f"evolved blueprint -> {out_dir / 'evolved_blueprint.json'}")
-    if best_bp.policy_weights:
-        n_pos = sum(
-            1
-            for fw in best_bp.policy_weights.values()
-            for w in fw.values()
-            if w > 0
-        )
-        print(
-            f"policy: {len(best_bp.policy_weights)} primitives x "
-            f"{len(next(iter(best_bp.policy_weights.values())))} features, "
-            f"{n_pos} positive weights, "
-            f"threshold={best_bp.policy_confidence_threshold:.3f}, "
-            f"fallback_budget={best_bp.policy_fallback_budget}",
-            file=sys.stderr,
-        )
+    print(
+        f"  priority={best_bp.primitive_priority[0]}..{best_bp.primitive_priority[-1]} "
+        f"budget={best_bp.primitive_budget}",
+        file=sys.stderr,
+    )
     return 0
 
 
@@ -171,17 +163,27 @@ def _row(label: str, summary: dict, budget: int) -> Dict[str, object]:
         "n_tasks": summary["n_tasks"],
         "pass_rate": summary["pass_rate"],
         "pass_rate_ci95": [lo, hi],
+        "actual_attempts_sum": summary["actual_attempts_sum"],
+        "eff_budget_attempts_sum": summary["eff_budget_attempts_sum"],
         "mean_iters_solved": summary["mean_iters_solved"],
-        "mean_iters_all_with_failed_at_budget": summary["mean_iters_all_with_failed_at_budget"],
+        "mean_iters_actual_all": summary["mean_iters_actual_all"],
+        "mean_iters_eff_all": summary["mean_iters_eff_all"],
         "mean_wall_s": summary["mean_wall_s"],
     }
 
 
 def _ascii_table(rows: List[Dict[str, object]]) -> str:
-    """Render the budget-controlled comparison as a fixed-width table."""
+    """Render the budget-controlled comparison as a fixed-width table.
+
+    Both `actual` and `eff_bud` mean-iters columns appear so the
+    reader can separate work the agent actually did from work it was
+    charged for. The `actual` column includes failed tasks at the
+    iters they ran; `eff_bud` charges failed tasks at their per-task
+    effective budget.
+    """
     header = (
         f"{'row':<24} {'budget':>6} {'pass':<14} {'CI95':<22} "
-        f"{'iters/solved':>13} {'iters/all*':>11} {'wall_s':>8}"
+        f"{'iters/solved':>13} {'iters/actual':>13} {'iters/eff':>10} {'wall_s':>8}"
     )
     out = [header, "-" * len(header)]
     for r in rows:
@@ -191,10 +193,11 @@ def _ascii_table(rows: List[Dict[str, object]]) -> str:
         out.append(
             f"{r['row']:<24} {r['budget']:>6d} {pass_str:<14} {ci_str:<22} "
             f"{r['mean_iters_solved']:>13.2f} "
-            f"{r['mean_iters_all_with_failed_at_budget']:>11.2f} "
+            f"{r['mean_iters_actual_all']:>13.2f} "
+            f"{r['mean_iters_eff_all']:>10.2f} "
             f"{r['mean_wall_s']:>8.2f}"
         )
-    out.append("* iters/all counts unsolved tasks at their effective budget.")
+    out.append("iters/actual counts failed tasks at iters they ran; iters/eff at the effective budget.")
     return "\n".join(out)
 
 
@@ -252,6 +255,30 @@ def cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_perturb(args: argparse.Namespace) -> int:
+    """Build the canonical perturbation report.
+
+    Runs all seven ablation rows on every requested split and writes
+    a JSON report. The report is the load-bearing evidence behind the
+    deployed strategy; rerunning this command from a clean checkout
+    must reproduce the committed report byte-for-byte (see
+    `tests/test_perturb.py`).
+    """
+    stem_bp = Blueprint.from_json(Path(args.stem))
+    deployed_bp = Blueprint.from_json(Path(args.evolved))
+    config = PerturbConfig(
+        bench=Path(args.bench),
+        stem_blueprint=stem_bp,
+        deployed_blueprint=deployed_bp,
+        splits=tuple(args.splits),
+        random_seed=args.seed,
+    )
+    report = build_report(config)
+    print(render_table(report))
+    write_report(report, Path(args.out))
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="stem")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -293,6 +320,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     p_cmp.add_argument("--out", default=None)
     p_cmp.set_defaults(func=cmd_compare)
+
+    p_pt = sub.add_parser(
+        "perturb",
+        help="seven-row ablation report for the deployed evolved blueprint",
+    )
+    p_pt.add_argument("--stem", required=True)
+    p_pt.add_argument("--evolved", required=True)
+    p_pt.add_argument("--bench", default="benchmarks/pybugs")
+    p_pt.add_argument(
+        "--splits",
+        nargs="+",
+        default=["test", "challenge"],
+        choices=["train", "dev", "test", "challenge"],
+    )
+    p_pt.add_argument("--seed", type=int, default=1234)
+    p_pt.add_argument("--out", required=True)
+    p_pt.set_defaults(func=cmd_perturb)
 
     args = parser.parse_args(argv)
     return args.func(args)

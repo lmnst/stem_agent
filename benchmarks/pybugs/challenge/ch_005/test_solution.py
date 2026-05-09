@@ -1,9 +1,17 @@
-from solution import reverse_list
+from solution import sum_first_n
 
 
 def test_basic():
-    assert reverse_list([1, 2, 3]) == [3, 2, 1]
+    assert sum_first_n(3) == 6
 
 
-def test_empty():
-    assert reverse_list([]) == []
+def test_five():
+    assert sum_first_n(5) == 15
+
+
+def test_one():
+    assert sum_first_n(1) == 1
+
+
+def test_zero():
+    assert sum_first_n(0) == 0

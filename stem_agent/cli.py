@@ -279,7 +279,9 @@ def cmd_perturb(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def make_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser. Exposed so tests can validate documented
+    invocations without invoking the commands themselves."""
     parser = argparse.ArgumentParser(prog="stem")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -337,8 +339,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_pt.add_argument("--seed", type=int, default=1234)
     p_pt.add_argument("--out", required=True)
     p_pt.set_defaults(func=cmd_perturb)
+    return parser
 
-    args = parser.parse_args(argv)
+
+def main(argv: Optional[List[str]] = None) -> int:
+    args = make_parser().parse_args(argv)
     return args.func(args)
 
 

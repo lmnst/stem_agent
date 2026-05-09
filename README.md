@@ -1,97 +1,177 @@
 # stem-agent
 
-A minimal **stem agent** that takes a class of problems, studies how
-that class is typically solved, evolves into a specialized agent, and
-then executes tasks in that specialized form. The build target for
-this take-home is the *process*, not a hand-tuned solver in disguise.
+stem-agent is a minimal agent that specializes itself for a class of
+problems through measurable evolution. The chosen problem class is
+single-function Python bug repair on a 40-task benchmark.
 
-The chosen problem class is **single-function Python bug repair**.
-See `docs/writeup.md` for the controlled headline, the stem-vs-evolved
-blueprint diff, the ablation table, and an honest discussion of the
-mechanism that did not survive ablation. The committed perturbation
-report at `docs/evaluation/perturbation_report.json` is the load-bearing
-evidence behind the deployed strategy.
+On the held-out test split (n=12), the deployed evolved blueprint
+solves 12/12 with 37 actual attempts; the unmodified stem solves 9/12
+with 47. The deployed strategy is reverse-alphabetical primitive
+priority at budget 12, attributed to variant-fanout dynamics on this
+synthetic benchmark.
 
-## Setup
+This submission attempted a learned specialization mechanism; ablation rejected it, and the surviving result is budget plus ordering.
+
+## Test-split results
+
+Numbers below come from `docs/evaluation/perturbation_report.json`,
+the load-bearing ablation report regenerable from the documented
+pipeline.
+
+| row                  | pass rate     | Wilson 95% CI    | actual | mean iters / solved |
+|---|---|---|---|---|
+| stem default         | 9/12 (75.0%)  | [46.8, 91.1]     | 47     | 2.56                |
+| stem evolved budget  | 11/12 (91.7%) | [64.6, 98.5]     | 55     | 3.91                |
+| deployed evolved     | 12/12 (100%)  | [75.8, 100.0]    | 37     | 3.08                |
+| reverse only         | 12/12 (100%)  | [75.8, 100.0]    | 37     | 3.08                |
+| policy only          | 12/12 (100%)  | [75.8, 100.0]    | 42     | 3.50                |
+| zero policy          | 12/12 (100%)  | [75.8, 100.0]    | 37     | 3.08                |
+| random policy        | 11/12 (91.7%) | [64.6, 98.5]     | 51     | 3.55                |
+
+Deployed evolved is identical to reverse only at budget 12 (rows 3
+and 4 are the same strategy by construction). The Wilson 95%
+intervals overlap across all four 12/12 rows; on n=12 this is a
+suggestive single-run result, so n=12 is the binding constraint on
+the pass-rate claim.
+
+The full discussion (blueprint diff, rejected-policy reasoning,
+challenge-split boundary analysis) is in `docs/writeup.md`.
+
+## Pipeline
+
+```mermaid
+flowchart LR
+    train[train split]
+    dev[dev split]
+    analyze[analyze_domain]
+    profile[profile.json]
+    ev[evolve]
+    bp[evolved blueprint]
+    test[test split]
+    challenge[challenge split]
+    runs[eval / compare / perturb]
+    report[perturbation_report.json]
+
+    train --> analyze --> profile --> ev
+    dev --> ev --> bp --> runs
+    test --> runs
+    challenge --> runs
+    runs --> report
+```
+
+The pipeline is fully deterministic and runs without network access.
+There is no LLM in the system.
+
+## Quickstart
+
+Three commands reproduce the headline from a clean checkout
+(Python >= 3.9):
 
 ```bash
-python -m venv .venv
-. .venv/Scripts/activate          # Windows PowerShell: .venv\Scripts\Activate.ps1
+# 1. install
 pip install -e .
-```
 
-Python >= 3.9. The pipeline is fully deterministic and runs without
-network access. There is no LLM in the system.
-
-## Running the tests
-
-```bash
+# 2. run the offline test suite (104 tests)
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/
+
+# 3. regenerate the canonical perturbation report
+python -m stem_agent.cli evolve --bench benchmarks/pybugs --out artifacts
+python -m stem_agent.cli perturb \
+    --stem artifacts/stem_blueprint.json \
+    --evolved artifacts/evolved_blueprint.json \
+    --bench benchmarks/pybugs --splits test challenge --seed 1234 \
+    --out docs/evaluation/perturbation_report.json
 ```
 
-> **Tip.** `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is recommended because
-> some Anaconda or user-site Python installs ship third-party pytest
-> plugins whose plugin-load step writes assertion-rewrite caches and
-> can hang for a minute or more on a fresh environment. This project
-> depends on no third-party pytest plugins, so disabling autoload is
-> safe and keeps the documented invocation robust.
+Step 3 must reproduce the committed report byte-for-byte;
+`tests/test_perturb.py::test_canonical_perturbation_report_is_regenerable`
+enforces that.
 
-## Running the pipeline
+## Benchmark splits
 
-The commands below regenerate every artifact under `artifacts/` and
-the canonical perturbation report under `docs/evaluation/`. They are
-deterministic; two consecutive `evolve` runs produce a byte-identical
-`evolved_blueprint.json`, and two consecutive `perturb` runs produce
-a byte-identical report (pinned by `tests/test_pipeline.py` and
-`tests/test_perturb.py`).
+40 tasks under `benchmarks/pybugs/`, four splits:
+
+- `train/` (12 tasks): used by `analyze_domain` to estimate primitive
+  priors and the recommended budget.
+- `dev/` (8 tasks): used by generational evolution to score candidate
+  blueprints. The dev winner is selected by maximum pass rate then
+  minimum total actual attempts.
+- `test/` (12 tasks): held out; never opened during analysis or
+  evolution. The headline pass-rate numbers come from this split.
+- `challenge/` (8 tasks): bugs whose repair is not a single-site
+  application of any primitive. Both the stem and the deployed
+  evolved blueprint fail every challenge task; reported separately as
+  boundary analysis, with `actual` and `eff_bud` attempts side by
+  side.
+
+The eight in-bank and eight challenge bug families are listed in
+`benchmarks/pybugs/README.md`.
+
+## Full pipeline
+
+The Quickstart's evolve plus perturb is enough to reproduce the
+committed report. The grouped commands below regenerate every
+artifact under `artifacts/` as well.
+
+**(a) Evolve and produce blueprints.** Domain probe over train, then
+generational evolution over dev. Writes the stem and evolved
+blueprints, the domain profile, and the evolution log.
 
 ```bash
-# 1. evolve a specialized blueprint from train + dev splits
 python -m stem_agent.cli evolve --bench benchmarks/pybugs --out artifacts
+```
 
-# 2. evaluate the stem blueprint on the held-out test split
+**(b) Evaluate each blueprint on the held-out test split.**
+
+```bash
 python -m stem_agent.cli eval \
     --blueprint artifacts/stem_blueprint.json \
     --bench benchmarks/pybugs --split test --out artifacts/stem_test.json
 
-# 3. evaluate the evolved blueprint on the held-out test split
 python -m stem_agent.cli eval \
     --blueprint artifacts/evolved_blueprint.json \
     --bench benchmarks/pybugs --split test --out artifacts/evolved_test.json
+```
 
-# 4. budget-controlled four-row stem-vs-evolved on the in-bank test split
+**(c) Budget-controlled four-row stem-vs-evolved on test and
+challenge.**
+
+```bash
 python -m stem_agent.cli compare \
     --stem artifacts/stem_blueprint.json \
     --evolved artifacts/evolved_blueprint.json \
     --bench benchmarks/pybugs --split test \
     --out artifacts/compare_test.json
 
-# 5. budget-controlled four-row stem-vs-evolved on the challenge split
 python -m stem_agent.cli compare \
     --stem artifacts/stem_blueprint.json \
     --evolved artifacts/evolved_blueprint.json \
     --bench benchmarks/pybugs --split challenge \
     --out artifacts/compare_challenge.json
+```
 
-# 6. canonical perturbation report (test + challenge in a single JSON)
+**(d) Canonical perturbation report (test + challenge in one JSON).**
+
+```bash
 python -m stem_agent.cli perturb \
     --stem artifacts/stem_blueprint.json \
     --evolved artifacts/evolved_blueprint.json \
     --bench benchmarks/pybugs --splits test challenge --seed 1234 \
     --out docs/evaluation/perturbation_report.json
+```
 
-# (optional) solve a single task with a chosen blueprint
+The pipeline is deterministic; two consecutive `evolve` runs produce
+a byte-identical `evolved_blueprint.json`, and two consecutive
+`perturb` runs produce a byte-identical report (pinned by
+`tests/test_pipeline.py` and `tests/test_perturb.py`).
+
+(optional) solve a single task with a chosen blueprint:
+
+```bash
 python -m stem_agent.cli solve \
     --blueprint artifacts/evolved_blueprint.json \
     --task benchmarks/pybugs/test/task_021
 ```
-
-The committed `docs/evaluation/perturbation_report.json` is the
-output of step 6 with `--seed 1234` against the repository's
-benchmark and the artifacts produced by step 1. Step 6 must
-reproduce the committed file byte-for-byte; the test
-`tests/test_perturb.py::test_canonical_perturbation_report_is_regenerable`
-enforces that.
 
 ## Layout
 
@@ -104,25 +184,7 @@ docs/writeup.md  the write-up reviewers should read first
 docs/evaluation/perturbation_report.json  committed ablation report
 ```
 
-## Splits
-
-The benchmark has 40 tasks total in four splits:
-
-- `train/` (12 tasks): used by `analyze_domain` to estimate primitive
-  priors and the recommended budget.
-- `dev/` (8 tasks): used by generational evolution to score
-  candidate blueprints. The dev winner is selected by maximum pass
-  rate then minimum total actual attempts.
-- `test/` (12 tasks): held out; never opened during analysis or
-  evolution. The headline pass-rate numbers come from this split.
-- `challenge/` (8 tasks): bugs whose repair is not a single-site
-  application of any primitive. Both the stem and the deployed
-  evolved blueprint fail every challenge task; the split is reported
-  separately as boundary analysis, with `actual` and `eff_bud`
-  attempts side by side so the report cannot conflate "ran fewer
-  attempts" with "solved more tasks".
-
-## Artifacts under artifacts/
+## Artifacts under `artifacts/`
 
 These are produced by the documented pipeline run, not committed:
 
@@ -141,19 +203,11 @@ These are produced by the documented pipeline run, not committed:
   budget-controlled stem-vs-evolved tables on the in-bank test split
   and the challenge split.
 
-## Honesty notes
+## Troubleshooting
 
-- The deployed evolved blueprint is the dev-winning priority and
-  budget. A learned per-task primitive policy was attempted in an
-  earlier iteration of this project; controlled ablation on the
-  test split rejected it (it ties on pass rate and increases actual
-  attempts from 37 to 42). The policy code path is preserved only
-  so the perturbation report can construct the rejected
-  configuration as labelled ablation rows.
-- All numbers in the writeup come from the committed perturbation
-  report. No LLM is involved.
-- Tasks are run in temp workspaces; the benchmark files are never
-  mutated.
-- All sources of truth (profile, blueprints, evolution log, compare
-  tables) are written under `artifacts/`. The committed report
-  lives under `docs/evaluation/`.
+`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is recommended because some
+Anaconda or user-site Python installs ship third-party pytest
+plugins whose plugin-load step writes assertion-rewrite caches and
+can hang for a minute or more on a fresh environment. This project
+depends on no third-party pytest plugins, so disabling autoload is
+safe and keeps the documented invocation robust.

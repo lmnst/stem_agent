@@ -7,13 +7,11 @@ On the held-out test split (n=12), the deployed evolved blueprint solves 12/12 w
 | row                  | pass rate     | Wilson 95% CI    | actual |
 |---|---|---|---|
 | deployed evolved     | 12/12 (100%)  | [75.8, 100.0]    | 37     |
-| reverse only         | 12/12 (100%)  | [75.8, 100.0]    | 37     |
-| zero policy          | 12/12 (100%)  | [75.8, 100.0]    | 37     |
 | policy only          | 12/12 (100%)  | [75.8, 100.0]    | 42     |
-| stem evolved budget  | 11/12 (91.7%) | [64.6, 98.5]     | 55     |
 | stem default         | 9/12 (75.0%)  | [46.8, 91.1]     | 47     |
+| stem evolved budget  | 11/12 (91.7%) | [64.6, 98.5]     | 55     |
 
-Deployed evolved is indistinguishable from reverse only at budget 12 (rows 1 and 2 are the same strategy by construction); the policy configurations underperform on attempts.
+The full report includes reverse-only and zero-policy rows, both equivalent to deployed evolved by construction (12/12 at 37 attempts); the policy variant ties on pass rate but spends five more attempts.
 
 > This submission attempted a learned specialization mechanism; ablation rejected it, and the surviving result is budget plus ordering.
 
@@ -21,29 +19,24 @@ Deployed evolved is indistinguishable from reverse only at budget 12 (rows 1 and
 
 A stem blueprint defined a domain-agnostic baseline. Domain analysis fit a per-task primitive policy from train and dev observations (lift-score weights per primitive-feature pair, a confidence threshold at the 25th percentile of solved-task max scores, a fallback budget at the median iters-to-solve). Generational evolution scored candidate strategies on dev and selected the dev winner by maximum pass rate then minimum total actual attempts. A perturbation report then tested the deployed strategy under controlled ablation on the held-out test split, isolating priority, budget, and policy as separate variables across seven rows.
 
-The perturbation found that random Gaussian weights misjudged confidence and fired the fallback budget on more tasks than the learned weights (three vs one), but the learned weights still lost on attempts to plain reverse-alphabetical priority at the same 12/12 pass rate. The fitted weights captured the variant-fanout structure of the primitive bank, where low-fanout primitives at the head of the queue clear budget cheaply for the actual fixers. Reverse-alphabetical ordering encodes the same effect by accident, at lower complexity. The simpler change won.
+The simpler change won. The fitted weights captured the variant-fanout structure of the primitive bank, where low-fanout primitives at the head of the queue clear budget cheaply for the actual fixers; reverse-alphabetical ordering encodes the same effect by accident, at lower complexity. Random Gaussian weights misjudged confidence and fired the fallback budget on more tasks than the learned weights (three vs one), but the learned weights still lost on attempts to plain reverse-alphabetical priority at the same 12/12 pass rate.
 
-## Pipeline
+## Variant fanout
 
-```mermaid
-flowchart LR
-    train[train split]
-    dev[dev split]
-    analyze[analyze_domain]
-    profile[profile.json]
-    evolve[evolve]
-    score[dev candidate scoring]
-    blueprint[evolved_blueprint.json]
-    splits[test + challenge splits]
-    runs[eval / perturb]
-    report[docs/evaluation/perturbation_report.json]
+Mean variants per in-bank task (32 tasks across train, dev, test), with primitives in reverse-alphabetical (deployed) order:
 
-    train --> analyze --> profile --> evolve
-    dev --> evolve --> score --> blueprint
-    blueprint --> runs
-    splits --> runs
-    runs --> report
 ```
+swap_true_false       █             0.34
+swap_eq_neq           ·             0.12
+swap_compare_strict   ██            0.50
+swap_call_args        ·             0.12
+swap_arith_pair       ███████████   3.25
+swap_and_or           ·             0.19
+shift_const_pm1       ████████      2.31
+flip_compare          ██            0.50
+```
+
+The four cheapest primitives sit at positions 1-4 (combined mean fanout ~1.1), so the agent falls through them in roughly one attempt before reaching the high-fanout fixers. Alphabetical priority inverts that: shift_const_pm1 (2.31) lands at position 2 and swap_arith_pair (3.25) at position 4, burning ~6 attempts before the rest of the queue runs.
 
 ## Quickstart
 

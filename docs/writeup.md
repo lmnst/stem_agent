@@ -1,5 +1,7 @@
 # stem-agent: write-up
 
+The deployed specialization is reverse-alphabetical primitive priority at budget 12, attributed to variant-fanout dynamics on this synthetic benchmark.
+
 This submission attempted a learned specialization mechanism; ablation rejected it, and the surviving result is budget plus ordering.
 
 > Every number in this document comes from the deterministic
@@ -65,17 +67,17 @@ not get rewarded for solving fewer things.
 | policy only          | 12     | 12/12 = 100%    | [75.8, 100.0] | 42     | 42      | yes      |
 
 **What the rows show.** The deployed evolved configuration is reverse
-priority at budget 12. It ties on pass rate with `zero policy` and
-`reverse only` because it *is* `reverse only` (rows 3, 4, 6 are the
-same strategy, by construction). Adding the rejected learned policy on
-top of reverse (a configuration not deployed) does not improve pass
-rate and increases actual attempts from 37 to 42 (`policy only`,
-which here pairs the policy with alphabetical priority, hits 42 as
-well). Random Gaussian weights with a fixed seed score 11/12 with 51
-attempts: the policy fallback budget triggers on a task it should not
-have. The Wilson 95% intervals overlap across all four 12/12 rows; on
-n=12 this is a suggestive single-run result, not a statistically
-separable one. We report it that way.
+priority at budget 12. Rows 3 (`deployed evolved`), 4 (`zero policy`),
+and 6 (`reverse only`) are the same strategy by construction: reverse
+priority with no active policy, 12/12 at 37 attempts. The policy
+variant in the table, `policy only` (row 7), applies the learned
+policy on top of alphabetical priority and hits 12/12 at 42 attempts,
+five more than the reverse-only deployed strategy at the same pass
+rate. `random policy` (row 5, random Gaussian weights with a fixed
+seed and reverse priority) scores 11/12 with 51 attempts, the only
+configuration that loses a task. The Wilson 95% intervals overlap
+across all four 12/12 rows; on n=12 this is a suggestive single-run
+result, not a statistically separable one. We report it that way.
 
 The "75% to 100%" claim that earlier drafts led with mixed budget and
 ordering effects. The controlled view splits them: **moving stem to
@@ -131,21 +133,21 @@ policy (`stem_agent/policy.py`) to the deployed blueprint:
 The hypothesis was that per-task feature counts would steer the
 variant queue toward the right primitive faster than the global
 priority and would let the agent give up cheaply on out-of-bank
-tasks. The committed perturbation report tests both halves on the
-held-out test split:
+tasks. The committed perturbation report tests the policy on the
+held-out test split as `policy only` (policy applied on top of
+alphabetical priority at budget 12):
 
-- **Pass rate.** Adding the policy to the deployed strategy does not
-  change pass rate at all (12/12 either way).
-- **Actual attempts.** Adding the policy *increases* actual attempts
-  on test from 37 to 42. The policy reorders for tasks where the
-  reverse priority was already finding the fix in the first one or
-  two attempts; the per-task ranking pushes the actual fixer past
-  where reverse would have hit it.
+- **Pass rate.** `policy only` reaches 12/12. Adding the policy to
+  the alphabetical baseline recovers the same pass rate the simpler
+  reverse-priority change already reaches.
+- **Actual attempts.** `policy only` runs 42 attempts to deployed
+  evolved's 37. The simpler ordering change beats the policy on
+  attempts at the same pass rate.
 - **Random control.** Random Gaussian weights with a fixed seed
-  score 11/12 (loses a task) and run for 51 attempts. The learned
-  weights beat the random ones on pass rate, but they also beat the
-  random ones on attempts simply because the fallback fires less
-  often, not because the per-task ordering is right.
+  (`random policy`) score 11/12 with 51 attempts. The learned
+  weights beat random, but the comparison that matters is policy
+  versus the simpler reverse-only configuration, and reverse-only
+  wins.
 
 The selection rule (max dev pass rate, min total actual attempts)
 plus the test-split ablation rejects the learned mechanism: it does
@@ -158,22 +160,9 @@ deployed blueprint.
 
 ## 6. Out-of-bank challenge split
 
-The challenge split (`benchmarks/pybugs/challenge/`) is eight
-hand-authored tasks, each named for a real bug class:
-
-- `ch_001`: wrong identifier
-- `ch_002`: constant scaled by a delta larger than +/- 1
-- `ch_003`: multi-edit arithmetic and constant sign
-- `ch_004`: missing branch
-- `ch_005`: off-by-one loop bound
-- `ch_006`: wrong dictionary key
-- `ch_007`: wrong normalization function
-- `ch_008`: multi-site arithmetic restructuring
-
-Each task generates at least four variants via the primitive bank,
-so failure is a real attempt-and-fail, not a no-variant short-circuit.
-Test suites use multiple data points so a coincidental single-site
-fix would be caught on at least one case.
+This section documents the closed primitive bank's boundary. The
+eight challenge bug classes are listed in
+`benchmarks/pybugs/README.md`.
 
 The committed perturbation report on the challenge split:
 
@@ -187,20 +176,12 @@ The committed perturbation report on the challenge split:
 | reverse only         | 12     | 0/8 = 0.0%  | [0.0, 32.4] | 63     | 96      |
 | policy only          | 12     | 0/8 = 0.0%  | [0.0, 32.4] | 55     | 76      |
 
-Both the deployed strategy and every ablation fail every challenge
-task, by design. The `actual` and `eff_bud` columns differ on this
-split because the challenge tasks run out of variants before they run
-out of budget; charging failed tasks at the budget (`eff_bud`) gives
-the cleaner cost ceiling, while `actual` reports the work the agent
-truly did. **The `actual` numbers do not equal the `eff_bud` numbers
-on the challenge split, so any framing about "fewer iterations" must
-read off `actual`, not `eff_bud`.** Both numbers are reported above so
-no row can hide one behind the other.
-
-The challenge split is not part of the headline. It is a boundary
-analysis that bounds where the primitive bank breaks down: out-of-bank
-bugs do not get fixed, and the deployed strategy has no special
-mechanism for giving up on them.
+Every configuration fails every challenge task, by design. The
+`actual` and `eff_bud` columns differ on this split because failed
+tasks run out of variants before they run out of budget; **any
+framing about "fewer iterations" must read off `actual`, not
+`eff_bud`.** Both numbers are reported so no row can hide one behind
+the other.
 
 ## 7. Limitations
 

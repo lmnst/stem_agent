@@ -6,7 +6,7 @@ generational search over primitive priorities and budgets, then evaluated on a
 held-out test split with Wilson 95% confidence intervals and a committed
 ablation report.
 
-> Originally a JetBrains research internship take-home; this repository is the
+> Originally an internship application take-home task; this repository is the
 > cleaned-up standalone version, with the original pipeline, benchmark, and
 > committed perturbation report preserved.
 

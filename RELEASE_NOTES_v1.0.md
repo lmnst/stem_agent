@@ -2,7 +2,7 @@
 
 First tagged release of blueprint-repair as a standalone portfolio project.
 
-This is the cleaned-up version of a JetBrains research internship take-home.
+This is the cleaned-up version of an internship application take-home task.
 The pipeline, benchmark, and committed perturbation report are unchanged from
 the original submission; only repository-level packaging (name, README,
 metadata) has been updated for standalone presentation.

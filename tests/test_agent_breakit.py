@@ -13,8 +13,8 @@ writes to).
 """
 from pathlib import Path
 
-from stem_agent.agent import solve_task
-from stem_agent.evolve import stem_blueprint
+from blueprint_repair.agent import solve_task
+from blueprint_repair.evolve import stem_blueprint
 
 
 def _write_task(td: Path, sol: str, test_src: str) -> Path:
@@ -86,7 +86,7 @@ def test_budget_exhausted_note(tmp_path):
         "    assert f(0) == 'never'\n"  # impossible to satisfy via primitive
     )
     td = _write_task(tmp_path / "task", src, test_src)
-    from stem_agent.blueprint import Blueprint, PRIMITIVE_NAMES
+    from blueprint_repair.blueprint import Blueprint, PRIMITIVE_NAMES
     bp = Blueprint(
         primitive_priority=list(PRIMITIVE_NAMES),
         primitive_budget=2,

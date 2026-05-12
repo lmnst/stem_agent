@@ -3,13 +3,13 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "stem-agent"
+name = "blueprint-repair"
 version = "0.1.0"
 description = "A minimal stem agent that specializes itself for a class of problems via measurable evolution."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "stem-agent author" }]
+authors = [{ name = "blueprint-repair author" }]
 dependencies = [
   "pytest>=6.0",
 ]
@@ -18,11 +18,11 @@ dependencies = [
 dev = ["pytest>=6.0", "ruff>=0.4"]
 
 [project.scripts]
-stem = "stem_agent.cli:main"
+stem = "blueprint_repair.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["stem_agent*"]
+include = ["blueprint_repair*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

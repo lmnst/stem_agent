@@ -1,4 +1,4 @@
-# stem-agent: write-up
+# blueprint-repair: write-up
 
 The deployed specialization is reverse-alphabetical primitive priority at budget 12, attributed to variant-fanout dynamics on this synthetic benchmark.
 
@@ -34,7 +34,7 @@ Why this class fits the brief:
 
 The stem is a domain-specific Python AST repair agent that ships with:
 
-- the eight primitives in `stem_agent/primitives.py`
+- the eight primitives in `blueprint_repair/primitives.py`
   (`swap_compare_strict`, `flip_compare`, `swap_eq_neq`,
   `shift_const_pm1`, `swap_arith_pair`, `swap_and_or`,
   `swap_true_false`, `swap_call_args`);
@@ -119,7 +119,7 @@ test-split perturbation table shows it survives there too.
 ## 5. The rejected mechanism: a learned per-task policy
 
 An earlier iteration of this submission attached a per-task primitive
-policy (`stem_agent/policy.py`) to the deployed blueprint:
+policy (`blueprint_repair/policy.py`) to the deployed blueprint:
 
 - a `policy_weights[primitive][feature]` matrix fit from train + dev
   observations using a per-feature lift score (mean feature value on
@@ -153,7 +153,7 @@ The selection rule (max dev pass rate, min total actual attempts)
 plus the test-split ablation rejects the learned mechanism: it does
 not beat its own ablations on test. The honest deployed result is
 the simpler reverse-only strategy. The policy code path is preserved
-in `stem_agent/policy.py` and `stem_agent/agent.py` only so the
+in `blueprint_repair/policy.py` and `blueprint_repair/agent.py` only so the
 perturbation report can construct the rejected configuration as
 labelled ablation rows; no policy fields are written into the
 deployed blueprint.
@@ -224,15 +224,15 @@ the other.
 ## 9. Where to look in the code
 
 - Stem and the evolved-blueprint construction:
-  `stem_agent/evolve.py` (`stem_blueprint`, `evolve`)
-- Domain analysis: `stem_agent/analysis.py` (`analyze_domain`)
-- Rejected-policy fit and runtime: `stem_agent/policy.py`,
-  `stem_agent/agent.py` (`_resolve_policy`)
-- Perturbation report builder: `stem_agent/perturb.py`
-- CLI: `stem_agent/cli.py`
-- Mutation primitives: `stem_agent/primitives.py`
-- Sandboxed runner: `stem_agent/runner.py`
-- Wilson 95% CI helper: `stem_agent/stats.py`
+  `blueprint_repair/evolve.py` (`stem_blueprint`, `evolve`)
+- Domain analysis: `blueprint_repair/analysis.py` (`analyze_domain`)
+- Rejected-policy fit and runtime: `blueprint_repair/policy.py`,
+  `blueprint_repair/agent.py` (`_resolve_policy`)
+- Perturbation report builder: `blueprint_repair/perturb.py`
+- CLI: `blueprint_repair/cli.py`
+- Mutation primitives: `blueprint_repair/primitives.py`
+- Sandboxed runner: `blueprint_repair/runner.py`
+- Wilson 95% CI helper: `blueprint_repair/stats.py`
 
 The pipeline writes the following under `artifacts/` (regenerable,
 not committed):

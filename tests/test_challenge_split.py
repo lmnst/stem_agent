@@ -19,10 +19,10 @@ from pathlib import Path
 
 import pytest
 
-from stem_agent.agent import evaluate_split
-from stem_agent.blueprint import Blueprint
-from stem_agent.evolve import stem_blueprint
-from stem_agent.primitives import generate_variants
+from blueprint_repair.agent import evaluate_split
+from blueprint_repair.blueprint import Blueprint
+from blueprint_repair.evolve import stem_blueprint
+from blueprint_repair.primitives import generate_variants
 
 
 _REPO = Path(__file__).resolve().parent.parent
@@ -70,7 +70,7 @@ def test_original_benchmark_files_are_not_mutated_by_a_run():
 
 def test_at_least_six_of_eight_challenge_tasks_have_non_trivial_variants():
     """The brief requires 6 of 8; we satisfy 8 of 8 in this submission."""
-    from stem_agent.blueprint import PRIMITIVE_NAMES
+    from blueprint_repair.blueprint import PRIMITIVE_NAMES
 
     counts = {}
     for d in _challenge_task_dirs():
@@ -90,7 +90,7 @@ def test_no_challenge_docstring_admits_authoring_against_a_primitive():
     specific primitive name as the thing the bug was meant to defeat
     is forbidden. The rule's spirit: bugs are designed bug-class-first,
     not by reverse-engineering against `swap_call_args` etc."""
-    from stem_agent.blueprint import PRIMITIVE_NAMES
+    from blueprint_repair.blueprint import PRIMITIVE_NAMES
 
     offending: list[str] = []
     for d in _challenge_task_dirs():

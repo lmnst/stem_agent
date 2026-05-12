@@ -19,11 +19,11 @@ from pathlib import Path
 
 import pytest
 
-from stem_agent.analysis import analyze_domain
-from stem_agent.blueprint import PRIMITIVE_NAMES, Blueprint
-from stem_agent.cli import main as cli_main
-from stem_agent.evolve import evolve, stem_blueprint
-from stem_agent.perturb import (
+from blueprint_repair.analysis import analyze_domain
+from blueprint_repair.blueprint import PRIMITIVE_NAMES, Blueprint
+from blueprint_repair.cli import main as cli_main
+from blueprint_repair.evolve import evolve, stem_blueprint
+from blueprint_repair.perturb import (
     PerturbConfig,
     build_report,
     random_policy_weights,

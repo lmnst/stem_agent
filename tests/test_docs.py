@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from stem_agent.blueprint import Blueprint
-from stem_agent.cli import make_parser
+from blueprint_repair.blueprint import Blueprint
+from blueprint_repair.cli import make_parser
 
 
 _REPO = Path(__file__).resolve().parent.parent
@@ -56,14 +56,14 @@ def test_writeup_does_not_lead_with_old_75_to_100_claim():
 
 def test_readme_documents_perturb_command():
     text = _README.read_text(encoding="utf-8")
-    assert "stem_agent.cli perturb" in text
+    assert "blueprint_repair.cli perturb" in text
     assert "docs/evaluation/perturbation_report.json" in text
 
 
 def test_readme_documents_required_pipeline_commands():
     text = _README.read_text(encoding="utf-8")
     for tok in ("evolve", "eval", "compare", "perturb"):
-        assert f"stem_agent.cli {tok}" in text, f"README must document `{tok}` command"
+        assert f"blueprint_repair.cli {tok}" in text, f"README must document `{tok}` command"
 
 
 def _readme_cli_invocations() -> list[list[str]]:
@@ -76,11 +76,11 @@ def _readme_cli_invocations() -> list[list[str]]:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            if "stem_agent.cli" not in line:
+            if "blueprint_repair.cli" not in line:
                 continue
             tokens = line.split()
             try:
-                idx = tokens.index("stem_agent.cli")
+                idx = tokens.index("blueprint_repair.cli")
             except ValueError:
                 continue
             invocations.append(tokens[idx + 1 :])
@@ -90,7 +90,7 @@ def _readme_cli_invocations() -> list[list[str]]:
 def test_readme_cli_invocations_parse():
     parser = make_parser()
     invocations = _readme_cli_invocations()
-    assert invocations, "README must contain at least one stem_agent.cli invocation"
+    assert invocations, "README must contain at least one blueprint_repair.cli invocation"
     for argv in invocations:
         try:
             parser.parse_args(argv)

@@ -3,7 +3,7 @@ import math
 
 import pytest
 
-from stem_agent.stats import fmt_rate, wilson_interval
+from blueprint_repair.stats import fmt_rate, wilson_interval
 
 
 def test_wilson_zero_observations_returns_zero_zero():

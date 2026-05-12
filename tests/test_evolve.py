@@ -5,9 +5,9 @@ Tests must run without network and without an API key.
 import textwrap
 from pathlib import Path
 
-from stem_agent.analysis import analyze_domain
-from stem_agent.blueprint import PRIMITIVE_NAMES
-from stem_agent.evolve import evolve, stem_blueprint, score_blueprint
+from blueprint_repair.analysis import analyze_domain
+from blueprint_repair.blueprint import PRIMITIVE_NAMES
+from blueprint_repair.evolve import evolve, stem_blueprint, score_blueprint
 
 
 def _make_task(parent: Path, name: str, sol: str, test: str) -> Path:

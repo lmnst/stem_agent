@@ -1,7 +1,7 @@
 import textwrap
 from pathlib import Path
 
-from stem_agent.runner import read_solution, run_tests, task_workspace, write_solution
+from blueprint_repair.runner import read_solution, run_tests, task_workspace, write_solution
 
 
 def _make_task(parent: Path, sol: str, test: str) -> Path:

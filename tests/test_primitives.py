@@ -1,4 +1,4 @@
-from stem_agent.primitives import (
+from blueprint_repair.primitives import (
     PRIMITIVE_REGISTRY,
     generate_variants,
     primitive_flip_compare,
@@ -10,7 +10,7 @@ from stem_agent.primitives import (
     primitive_swap_eq_neq,
     primitive_swap_true_false,
 )
-from stem_agent.blueprint import PRIMITIVE_NAMES
+from blueprint_repair.blueprint import PRIMITIVE_NAMES
 
 
 def test_swap_compare_strict_basic():

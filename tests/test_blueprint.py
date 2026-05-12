@@ -2,7 +2,7 @@ import logging
 
 import pytest
 
-from stem_agent.blueprint import (
+from blueprint_repair.blueprint import (
     PRIMITIVE_NAMES,
     WORKFLOW_DEFAULT,
     Blueprint,
@@ -33,7 +33,7 @@ def test_blueprint_from_dict_strict_raises_on_unknown():
 
 
 def test_blueprint_from_dict_non_strict_drops_with_warning(caplog):
-    with caplog.at_level(logging.WARNING, logger="stem_agent.blueprint"):
+    with caplog.at_level(logging.WARNING, logger="blueprint_repair.blueprint"):
         b = Blueprint.from_dict(
             {"name": "x", "primitive_budget": 5, "stale_key": True},
             strict=False,

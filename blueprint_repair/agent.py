@@ -20,7 +20,7 @@ This per-task policy is a *rejected experiment*. Both the stem
 blueprint and the deployed evolved blueprint leave the policy fields
 empty, so the entire policy branch is inert in the deployed
 configuration. The branch is preserved only so the perturbation
-report (`stem_agent.perturb`) can build the rejected configuration
+report (`blueprint_repair.perturb`) can build the rejected configuration
 as a labelled ablation row. See
 `docs/evaluation/perturbation_report.json` for the rejection table.
 """

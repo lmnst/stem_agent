@@ -20,11 +20,11 @@ from typing import List
 
 import pytest
 
-from stem_agent import agent as agent_module
-from stem_agent.agent import evaluate_split
-from stem_agent.analysis import analyze_domain
-from stem_agent.blueprint import Blueprint
-from stem_agent.evolve import evolve, stem_blueprint
+from blueprint_repair import agent as agent_module
+from blueprint_repair.agent import evaluate_split
+from blueprint_repair.analysis import analyze_domain
+from blueprint_repair.blueprint import Blueprint
+from blueprint_repair.evolve import evolve, stem_blueprint
 
 
 def _make_task(parent: Path, name: str, sol: str, test: str) -> Path:

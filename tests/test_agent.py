@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from stem_agent.agent import solve_task
-from stem_agent.blueprint import PRIMITIVE_NAMES, Blueprint
-from stem_agent.evolve import stem_blueprint
+from blueprint_repair.agent import solve_task
+from blueprint_repair.blueprint import PRIMITIVE_NAMES, Blueprint
+from blueprint_repair.evolve import stem_blueprint
 
 
 def _make_task(parent: Path, name: str, sol: str, test: str) -> Path:

@@ -13,9 +13,9 @@ import json
 import textwrap
 from pathlib import Path
 
-from stem_agent.blueprint import PRIMITIVE_NAMES, Blueprint
-from stem_agent.cli import main as cli_main
-from stem_agent.evolve import stem_blueprint
+from blueprint_repair.blueprint import PRIMITIVE_NAMES, Blueprint
+from blueprint_repair.cli import main as cli_main
+from blueprint_repair.evolve import stem_blueprint
 
 
 def _make_task(parent: Path, name: str, sol: str, test: str) -> Path:
